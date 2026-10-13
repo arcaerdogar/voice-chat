@@ -1,0 +1,15 @@
+services:
+  riftvoice:
+    build: .
+    image: riftvoice:latest
+    container_name: riftvoice
+    restart: always
+    environment:
+      - PORT=3000
+      # İsteğe bağlı TURN (bkz. README):
+      # - TURN_URLS=turn:turn.ornek.com:3478
+      # - TURN_USERNAME=kullanici
+      # - TURN_CREDENTIAL=sifre
+    # Sadece sunucunun içinden erişilir; dışarıya nginx açar.
+    ports:
+      - "127.0.0.1:4010:3000"

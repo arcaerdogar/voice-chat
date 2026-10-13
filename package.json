@@ -1,0 +1,23 @@
+{
+  "name": "riftvoice",
+  "version": "1.0.0",
+  "description": "Oyun için hafif, çökmeyen web tabanlı sesli sohbet (WebRTC P2P + WebSocket sinyal sunucusu)",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test \"test/*.test.js\"",
+    "test:server": "node --test test/server.test.js",
+    "test:e2e": "node --test test/e2e.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.0"
+  }
+}

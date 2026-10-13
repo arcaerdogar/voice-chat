@@ -1,0 +1,20 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: riftvoice
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # İsteğe bağlı TURN sunucusu (bkz. README):
+      # - key: TURN_URLS
+      #   sync: false
+      # - key: TURN_USERNAME
+      #   sync: false
+      # - key: TURN_CREDENTIAL
+      #   sync: false

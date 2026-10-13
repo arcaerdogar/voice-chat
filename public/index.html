@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RiftVoice</title>
+  <meta name="description" content="Oyun için hafif, kurulum gerektirmeyen sesli sohbet.">
+  <meta name="theme-color" content="#0a1018">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <noscript>RiftVoice için JavaScript gerekli.</noscript>
+
+  <!-- Giriş ekranı -->
+  <section id="join-view" class="view">
+    <form id="join-form" class="card join-card" autocomplete="off">
+      <div class="brand">
+        <img src="/favicon.svg" alt="" width="40" height="40">
+        <div>
+          <h1>RiftVoice</h1>
+          <p class="muted">Kurulum yok. Linki at, konuşun.</p>
+        </div>
+      </div>
+
+      <label for="name-input">Kullanıcı adı</label>
+      <input id="name-input" name="name" maxlength="24" required placeholder="ör. Faker" autocomplete="nickname">
+
+      <label for="room-input">Oda</label>
+      <div class="row">
+        <input id="room-input" name="room" maxlength="40" required pattern="[a-zA-Z0-9][a-zA-Z0-9\-]{0,39}" placeholder="ör. baron-takimi">
+        <button type="button" id="random-room" class="btn ghost" title="Rastgele oda adı">🎲</button>
+      </div>
+      <p class="hint">Harf, rakam ve tire. Aynı oda adını giren herkes aynı kanala düşer.</p>
+
+      <label for="join-mic">Mikrofon</label>
+      <select id="join-mic"><option value="">Varsayılan</option></select>
+
+      <p id="join-error" class="error" role="alert" hidden></p>
+      <button id="join-btn" class="btn primary big" type="submit">Kanala katıl</button>
+      <p class="hint center">Mikrofon izni istenecek. Ses doğrudan oyuncular arasında akar.</p>
+    </form>
+  </section>
+
+  <!-- Oda ekranı -->
+  <section id="room-view" class="view" hidden>
+    <header class="topbar">
+      <div class="room-title">
+        <img src="/favicon.svg" alt="" width="26" height="26">
+        <span class="muted">Oda</span>
+        <strong id="room-name"></strong>
+        <span id="member-count" class="pill"></span>
+      </div>
+      <div class="top-actions">
+        <span id="conn-status" class="conn-status ok" title="Sunucu bağlantısı">● Bağlı</span>
+        <button id="copy-link" class="btn ghost">🔗 Linki kopyala</button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <main class="room-main">
+      <div id="participants" class="participants" aria-live="polite"></div>
+
+      <aside class="chat" id="chat-panel">
+        <div class="chat-head">Sohbet</div>
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form" class="chat-form" autocomplete="off">
+          <input id="chat-input" maxlength="500" placeholder="Mesaj yaz…">
+          <button class="btn ghost" type="submit">Gönder</button>
+        </form>
+      </aside>
+    </main>
+
+    <footer class="controls">
+      <button id="mute-btn" class="ctrl" title="Mikrofonu kapat/aç (M)">
+        <span class="ico">🎙️</span><span class="lbl">Mikrofon</span>
+      </button>
+      <button id="deafen-btn" class="ctrl" title="Sesi kapat/aç (D)">
+        <span class="ico">🎧</span><span class="lbl">Kulaklık</span>
+      </button>
+      <button id="settings-btn" class="ctrl" title="Ayarlar">
+        <span class="ico">⚙️</span><span class="lbl">Ayarlar</span>
+      </button>
+      <button id="chat-btn" class="ctrl chat-toggle" title="Sohbet">
+        <span class="ico">💬</span><span class="lbl">Sohbet</span><span id="chat-badge" class="badge" hidden></span>
+      </button>
+      <button id="leave-btn" class="ctrl danger" title="Ayrıl">
+        <span class="ico">📞</span><span class="lbl">Ayrıl</span>
+      </button>
+    </footer>
+  </section>
+
+  <!-- Ayarlar -->
+  <dialog id="settings-dialog" class="card dialog">
+    <form method="dialog" class="dialog-inner">
+      <h2>Ayarlar</h2>
+
+      <label for="mic-select">Mikrofon</label>
+      <select id="mic-select"></select>
+
+      <label for="out-select">Hoparlör / kulaklık</label>
+      <select id="out-select"></select>
+      <p id="out-hint" class="hint" hidden>Bu tarayıcı çıkış cihazı seçmeyi desteklemiyor; sistem varsayılanı kullanılır.</p>
+
+      <label>Konuşma modu</label>
+      <div class="seg">
+        <label><input type="radio" name="mode" value="vad" checked> Açık mikrofon</label>
+        <label><input type="radio" name="mode" value="ptt"> Bas-konuş</label>
+      </div>
+      <div id="ptt-row" class="row" hidden>
+        <span class="muted">Tuş:</span>
+        <button type="button" id="ptt-key-btn" class="btn ghost">V</button>
+      </div>
+      <p class="hint" id="ptt-hint" hidden>⚠️ Tarayıcılar, sekme arka plandayken klavyeyi dinleyemez. Oyun tam ekrandayken bas-konuş çalışmaz; oyun sırasında <b>Açık mikrofon + ses eşiği</b> kullanın.</p>
+
+      <label for="gate-range">Ses eşiği <span id="gate-val" class="muted"></span></label>
+      <div class="meter gate-meter" aria-hidden="true">
+        <div id="meter-fill" class="meter-fill"></div>
+        <div id="gate-mark" class="gate-mark"></div>
+      </div>
+      <input type="range" id="gate-range" min="-80" max="-20" step="1" value="-80">
+      <p class="hint">Bu seviyenin altındaki sesler (klavye, fan) gönderilmez. En solda = kapalı.</p>
+
+      <label class="check"><input type="checkbox" id="ns-check" checked> Gürültü engelleme</label>
+      <label class="check"><input type="checkbox" id="ec-check" checked> Yankı engelleme</label>
+      <label class="check"><input type="checkbox" id="agc-check" checked> Otomatik ses seviyesi</label>
+
+      <div class="dialog-actions">
+        <button class="btn primary" value="close">Tamam</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <template id="participant-tpl">
+    <div class="participant">
+      <div class="avatar"><span class="initial"></span></div>
+      <div class="p-info">
+        <div class="p-name"><span class="name"></span><span class="you" hidden>(sen)</span></div>
+        <div class="p-status"><span class="dot"></span><span class="status-text"></span></div>
+      </div>
+      <div class="p-icons"><span class="i-mute" title="Mikrofon kapalı" hidden>🔇</span><span class="i-deaf" title="Sesi kapalı" hidden>🙉</span></div>
+      <div class="p-volume" hidden>
+        <input type="range" min="0" max="100" value="100" class="vol" aria-label="Ses seviyesi">
+        <button class="btn tiny ghost local-mute" title="Bu kişiyi sustur">🔈</button>
+      </div>
+    </div>
+  </template>
+
+  <script src="/app.js"></script>
+</body>
+</html>
