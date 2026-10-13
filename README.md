@@ -22,7 +22,8 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
 - **Ses eşiği** (noise gate): klavye/fan sesi gönderilmez. Sekme arka plandayken de çalışır (AudioWorklet)
 - Açık mikrofon veya bas-konuş (klavye tuşu ya da farenin yan tuşları)
 - Kişi bazlı ses seviyesi ve yerel susturma
-- Konuşan kişinin kartı yeşil parlar, her kişinin gecikmesi (ms) görünür
+- Konuşan kişinin kartı yeşil parlar, her kişinin gecikmesi (ms) ve bağlantının röle (TURN) üzerinden olup olmadığı görünür
+- Bağlantı kurulamazsa kartta sebebi yazar ("ağ kısıtlaması")
 - Mikrofon (M) / kulaklık (D) kısayolları, susturma ve katılma/ayrılma için bip sesleri (oyundayken ekrana bakmadan anlarsın)
 - Yazılı sohbet, kopyalanabilir oda linki, mobil uyumlu arayüz
 - Hesap yok, veritabanı yok, tek bağımlılık (`ws`)
@@ -50,6 +51,7 @@ Sunucu tek bir Node.js sürecidir ve HTTP + WebSocket'i aynı porttan (`PORT`) s
 ### Kendi sunucunda (nginx + Docker)
 
 Adım adım kurulum: [deploy/DEPLOY.md](deploy/DEPLOY.md). Nginx ayarı: [deploy/riftvoice.conf](deploy/riftvoice.conf).
+`docker-compose.yml` uygulamayla birlikte bir TURN sunucusu (coturn, [deploy/turnserver.conf](deploy/turnserver.conf)) da çalıştırır.
 
 ### Seçenek 1: Render (önerilen, ücretsiz katman var)
 
@@ -92,7 +94,8 @@ Metered (https://www.metered.ca/stun-turn, ücretsiz katman) veya kendi coturn s
 ```bash
 npm run test:server   # sunucu protokol testleri
 npm run test:e2e      # gerçek Chrome/Edge ile uçtan uca testler (sahte mikrofon)
-npm test              # hepsi
+npm run test:turn     # gerçek coturn (Docker) ile röle testi
+npm test              # hepsi (Docker yoksa TURN testi atlanır)
 ```
 
 Uçtan uca testler kurulu Chrome'u veya Edge'i kullanır.

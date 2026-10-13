@@ -43,6 +43,7 @@
   }
 
   const now = () => performance.now();
+  const FORCE_RELAY = new URLSearchParams(location.search).has('relay');
 
   const S = {
     id: randomId(),
@@ -208,11 +209,22 @@
     p.el.classList.toggle('offline', !p.online);
     const st = p.pc ? p.pc.connectionState : 'none';
     if (st === 'connected') {
-      setCardStatus(p.el, 'ok', p.rtt != null ? `Bağlı · ${p.rtt} ms` : 'Bağlı');
+      let text = 'Bağlı';
+      if (p.rtt != null) text += ` · ${p.rtt} ms`;
+      if (p.relay) text += ' · röle';
+      setCardStatus(p.el, 'ok', text);
+      p.el.querySelector('.status-text').title = p.relay
+        ? 'Doğrudan bağlantı kurulamadığı için ses TURN sunucusu üzerinden aktarılıyor.'
+        : 'Doğrudan (P2P) bağlantı';
     } else if (!p.online) {
       setCardStatus(p.el, 'warn', 'Sunucuyla bağlantısı koptu…');
     } else if (st === 'disconnected' || st === 'failed') {
       setCardStatus(p.el, 'bad', 'Bağlantı koptu, yeniden kuruluyor…');
+    } else if (p.attempts >= 2) {
+      // Birkaç deneme başarısız: büyük ihtimalle iki taraftan birinin ağı doğrudan bağlantıya izin vermiyor.
+      setCardStatus(p.el, 'bad', 'Bağlantı kurulamıyor (ağ kısıtlaması), deneniyor…');
+      p.el.querySelector('.status-text').title =
+        'Bu kişiyle aranızda doğrudan bağlantı kurulamıyor. Mobil hat, hotspot, VPN veya kurum ağı kullanılıyorsa olabilir. Sunucuda TURN ayarlıysa kısa sürede röle üzerinden bağlanır.';
     } else {
       setCardStatus(p.el, 'warn', 'Bağlanıyor…');
     }
@@ -672,6 +684,7 @@
         volume: store.get('vol:' + info.name, 100),
         localMuted: false,
         rtt: null,
+        relay: false,
         el: null,
       };
       S.peers.set(p.id, p);
@@ -732,6 +745,7 @@
     p.pc = null;
     p.sid = null;
     p.rtt = null;
+    p.relay = false;
     if (pc) {
       pc.onicecandidate = pc.onnegotiationneeded = pc.ontrack = pc.onconnectionstatechange = null;
       try {
@@ -747,6 +761,8 @@
   function createPc(p, sid) {
     const pc = new RTCPeerConnection({
       iceServers: S.iceServers,
+      // ?relay=1 ile açılırsa sadece TURN kullanılır (TURN sunucusunu test etmek için).
+      iceTransportPolicy: FORCE_RELAY ? 'relay' : 'all',
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
     });
@@ -978,14 +994,22 @@
       if (!p.pc || p.pc.connectionState !== 'connected') continue;
       try {
         const stats = await p.pc.getStats();
-        let rtt = null;
+        let pair = null;
         stats.forEach((r) => {
-          if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.currentRoundTripTime != null) {
-            rtt = Math.round(r.currentRoundTripTime * 1000);
-          }
+          if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId) || pair;
         });
-        if (rtt !== p.rtt) {
+        if (!pair) {
+          stats.forEach((r) => {
+            if (r.type === 'candidate-pair' && (r.selected || r.nominated) && r.state === 'succeeded') pair = r;
+          });
+        }
+        const rtt = pair && pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) : null;
+        const lc = pair && stats.get(pair.localCandidateId);
+        const rc = pair && stats.get(pair.remoteCandidateId);
+        const relay = !!((lc && lc.candidateType === 'relay') || (rc && rc.candidateType === 'relay'));
+        if (rtt !== p.rtt || relay !== p.relay) {
           p.rtt = rtt;
+          p.relay = relay;
           renderPeer(p);
         }
       } catch {}
@@ -1180,7 +1204,7 @@
     S.welcomed = false;
     S.wsAttempt = 0;
     btn.textContent = 'Bağlanılıyor…';
-    history.replaceState(null, '', '/r/' + encodeURIComponent(room));
+    history.replaceState(null, '', '/r/' + encodeURIComponent(room) + location.search);
 
     S.selfEl = makeCard(name, true);
     $('#participants').prepend(S.selfEl);
@@ -1266,7 +1290,7 @@
     $('#deafen-btn').onclick = toggleDeafen;
     $('#leave-btn').onclick = () => {
       leaveRoom(true);
-      history.replaceState(null, '', '/r/' + encodeURIComponent(S.room));
+      history.replaceState(null, '', '/r/' + encodeURIComponent(S.room) + location.search);
     };
     $('#copy-link').onclick = async () => {
       const link = `${location.origin}/r/${encodeURIComponent(S.room)}`;

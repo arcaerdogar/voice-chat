@@ -1,3 +1,4 @@
+# Kullanım: aynı klasörde .env dosyası olmalı (bkz. .env.example)
 services:
   riftvoice:
     build: .
@@ -6,10 +7,22 @@ services:
     restart: always
     environment:
       - PORT=3000
-      # İsteğe bağlı TURN (bkz. README):
-      # - TURN_URLS=turn:turn.ornek.com:3478
-      # - TURN_USERNAME=kullanici
-      # - TURN_CREDENTIAL=sifre
+      - TURN_URLS=turn:212.64.215.98:3478?transport=udp,turn:212.64.215.98:3478?transport=tcp
+      - TURN_SECRET=${TURN_SECRET:?.env dosyasinda TURN_SECRET ayarlanmali}
     # Sadece sunucunun içinden erişilir; dışarıya nginx açar.
     ports:
       - "127.0.0.1:4010:3000"
+
+  coturn:
+    image: coturn/coturn:4.6
+    container_name: riftvoice-turn
+    restart: always
+    # TURN çok sayıda UDP portu kullandığı için host ağında çalışır
+    # (portlar: 3478 udp/tcp, 49160-49260 udp).
+    network_mode: host
+    volumes:
+      - ./deploy/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    command:
+      - -c
+      - /etc/coturn/turnserver.conf
+      - --static-auth-secret=${TURN_SECRET:?.env dosyasinda TURN_SECRET ayarlanmali}
