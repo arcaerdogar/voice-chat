@@ -18,6 +18,13 @@
   const SPEAK_DB = -50; // konuşma göstergesi eşiği (dBFS)
   const GATE_OFF = -80; // eşik bu değerdeyse kapalı kabul edilir
   const GATE_HOLD_MS = 400; // ses eşiğin altına düştükten sonra mikrofonun açık kalma süresi
+  // Otomatik eşik, ses seviyesine değil RNNoise'un "bu konuşma mı" olasılığına (VAD) bakar;
+  // böylece mikrofon kazancı (AGC) değişse de çalışır. Ölçümlerde (test/noise.test.js)
+  // konuşmanın ~%97'si geçerken oyun sesi kalıntısı kesildi. Kısa patlama efektleri
+  // açmasın diye koşulun art arda 2 ölçümde (~40 ms) sağlanması gerekir.
+  const AUTO_GATE_VAD = 0.9;
+  const AUTO_GATE_MIN_DB = -55;
+  const AUTO_GATE_FRAMES = 2;
 
   const store = {
     get(k, d) {
@@ -58,8 +65,23 @@
     pingSentAt: 0,
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     ctx: null,
-    stream: null,
+    rawStream: null, // mikrofondan gelen ham akış
+    rawTrack: null,
+    stream: null, // gönderilen akış (ham ya da gürültüsü temizlenmiş)
     track: null,
+    aiNs: store.get('aiNs', true),
+    aiActive: false,
+    procSrc: null,
+    procDest: null,
+    rnnoiseReady: null,
+    clockOffset: 0, // sunucu saati - yerel saat (ms)
+    music: { queue: [], current: null },
+    musicVol: store.get('musicVol', 35),
+    yt: null,
+    ytCreating: null,
+    ytKey: null,
+    ytEndedSent: false,
+    ytStartTimer: null,
     analysisTrack: null,
     meterSrc: null,
     meterNode: null,
@@ -72,7 +94,9 @@
     pttKey: store.get('pttKey', 'KeyV'),
     pttLabel: store.get('pttLabel', 'V'),
     pttDown: false,
-    gate: store.get('gate', GATE_OFF),
+    gate: store.get('gate', GATE_OFF), // elle ayarlanan eşik
+    autoGate: store.get('autoGate', true),
+    gateRun: 0,
     gateOpenUntil: 0,
     micId: store.get('micId', ''),
     outId: store.get('outId', ''),
@@ -152,7 +176,10 @@
     log.appendChild(div);
     while (log.children.length > 300) log.firstChild.remove();
     if (stick) log.scrollTop = log.scrollHeight;
-    if (!sys && !$('#chat-panel').classList.contains('open') && getComputedStyle($('#chat-btn')).display !== 'none') {
+    const chatHidden =
+      $('#tab-chat').classList.contains('tab-off') ||
+      (!$('#chat-panel').classList.contains('open') && getComputedStyle($('#chat-btn')).display !== 'none');
+    if (!sys && chatHidden) {
       S.unread++;
       const badge = $('#chat-badge');
       badge.textContent = S.unread;
@@ -192,6 +219,7 @@
     else if (S.deafened) text = 'Ses kapalı';
     else if (S.muted) text = 'Mikrofon kapalı';
     else if (S.mode === 'ptt') text = `Bas-konuş (${S.pttLabel})`;
+    if (S.track && S.aiActive) text += ' · AI gürültü engelleme';
     setCardStatus(S.selfEl, S.muted || S.deafened || !S.track ? 'bad' : 'ok', text);
 
     $('#mute-btn').classList.toggle('off', S.muted || S.deafened || !S.track);
@@ -268,7 +296,9 @@
   async function acquireMic() {
     const audio = {
       echoCancellation: S.ec,
-      noiseSuppression: S.ns,
+      // Yapay zekâ gürültü engelleme açıkken tarayıcınınki kapatılır: ikisi üst üste
+      // çalışınca RNNoise'un girdisi bozuluyor ve oyun sesi zamanla daha çok sızıyor (ölçüldü).
+      noiseSuppression: S.ns && !S.aiNs,
       autoGainControl: S.agc,
       channelCount: 1,
     };
@@ -288,20 +318,93 @@
   }
 
   async function setMicStream(stream) {
-    const old = S.stream;
-    S.stream = stream;
-    S.track = stream.getAudioTracks()[0] || null;
-    if (S.track) {
-      S.track.onended = onMicEnded;
-      const settings = S.track.getSettings ? S.track.getSettings() : {};
-      if (settings.deviceId && !S.micId) S.currentMicId = settings.deviceId;
-    }
-    for (const p of S.peers.values()) attachLocalTrack(p);
-    applyTransmit();
-    if (old && old !== stream) old.getTracks().forEach((t) => t.stop());
-    await setupMeter();
+    const oldRaw = S.rawStream;
+    S.rawStream = stream;
+    S.rawTrack = stream.getAudioTracks()[0] || null;
+    if (S.rawTrack) S.rawTrack.onended = onMicEnded;
+    await rebuildSendTrack();
+    if (oldRaw && oldRaw !== stream) oldRaw.getTracks().forEach((t) => t.stop());
     renderSelf();
     refreshDevices();
+  }
+
+  /**
+   * Gönderilecek izi kurar. Yapay zekâ gürültü engelleme açıksa mikrofon sesi önce
+   * RNNoise'dan geçer: konuşma kalır; oyun sesi, müzik, klavye, fan büyük ölçüde silinir.
+   * (Tarayıcının yankı engellemesi sadece tarayıcının çaldığı sesleri bilir; hoparlörden
+   * gelen oyun sesini ancak bu şekilde bastırabiliriz.)
+   */
+  async function rebuildSendTrack() {
+    const raw = S.rawTrack;
+    let send = raw;
+    S.aiActive = false;
+    if (S.procSrc) {
+      try {
+        S.procSrc.disconnect();
+      } catch {}
+      S.procSrc = null;
+    }
+    if (raw && S.aiNs) {
+      try {
+        const node = await ensureRnnoise();
+        S.procSrc = S.ctx.createMediaStreamSource(new MediaStream([raw]));
+        S.procSrc.connect(node);
+        send = S.procDest.stream.getAudioTracks()[0];
+        S.aiActive = true;
+      } catch (err) {
+        console.warn('rnnoise', err);
+        if (!S.aiWarned) {
+          S.aiWarned = true;
+          toast('Yapay zekâ gürültü engelleme başlatılamadı; normal mikrofon kullanılıyor.', 4000);
+        }
+      }
+    }
+    S.track = send;
+    S.stream = send ? new MediaStream([send]) : null;
+    for (const p of S.peers.values()) attachLocalTrack(p);
+    applyTransmit();
+    await setupMeter();
+    renderSelf();
+  }
+
+  const WASM_SIMD_PROBE = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]);
+
+  function ensureRnnoise() {
+    if (!S.ctx || !S.ctx.audioWorklet || typeof AudioWorkletNode === 'undefined') return Promise.reject(new Error('AudioWorklet yok'));
+    if (S.ctx.sampleRate !== 48000) return Promise.reject(new Error('RNNoise 48 kHz ister, ses bağlamı ' + S.ctx.sampleRate));
+    if (!S.rnnoiseReady) {
+      S.rnnoiseReady = (async () => {
+        const simd = WebAssembly.validate(WASM_SIMD_PROBE);
+        const [wasm] = await Promise.all([
+          fetch(simd ? '/vendor/rnnoise/rnnoise_simd.wasm' : '/vendor/rnnoise/rnnoise.wasm').then((r) => {
+            if (!r.ok) throw new Error('rnnoise wasm ' + r.status);
+            return r.arrayBuffer();
+          }),
+          S.ctx.audioWorklet.addModule('/vendor/rnnoise/worklet.js'),
+        ]);
+        const node = new AudioWorkletNode(S.ctx, '@sapphi-red/web-noise-suppressor/rnnoise', {
+          channelCount: 1,
+          channelCountMode: 'explicit',
+          outputChannelCount: [1],
+          processorOptions: { maxChannels: 1, wasmBinary: wasm },
+        });
+        // Chrome, Web Audio'dan üretilen izde enabled=false'u göndericiye tam yansıtmıyor;
+        // susturma/eşik için sesi bir kazanç düğümüyle gerçekten sıfırlıyoruz.
+        S.sendGain = S.ctx.createGain();
+        S.sendGain.gain.value = 0;
+        S.procDest = S.ctx.createMediaStreamDestination();
+        S.procDest.channelCount = 1;
+        node.connect(S.sendGain).connect(S.procDest);
+        S.rnnoiseNode = node;
+        // Yamalı worklet ~21 ms'de bir RNNoise'un konuşma olasılığını (0-1) gönderir
+        node.port.onmessage = (e) => {
+          if (e.data && typeof e.data.vad === 'number') onVad(e.data.vad);
+        };
+        return node;
+      })();
+      S.rnnoiseReady.catch(() => (S.rnnoiseReady = null));
+    }
+    return S.rnnoiseReady;
   }
 
   let micRecovering = false;
@@ -344,12 +447,14 @@
   async function setupMeter() {
     if (!S.ctx || !S.track) return;
     try {
-      if (S.meterSrc) S.meterSrc.disconnect();
+      if (S.meterSrc && S.meterNode) {
+        try {
+          S.meterSrc.disconnect(S.meterNode);
+        } catch {}
+      }
+      S.meterSrc = null;
       if (S.analysisTrack) S.analysisTrack.stop();
-      // Gönderilen iz susturulduğunda (enabled=false) sessizlik üretir; ölçüm için
-      // bağımsız bir kopya kullanıyoruz ki eşik tekrar açılabilsin.
-      S.analysisTrack = S.track.clone();
-      S.analysisTrack.enabled = true;
+      S.analysisTrack = null;
 
       if (!S.meterNode) {
         if (!S.meterReady) {
@@ -378,7 +483,15 @@
         }
         S.meterNode = await S.meterReady;
       }
-      S.meterSrc = S.ctx.createMediaStreamSource(new MediaStream([S.analysisTrack]));
+      // Ölçüm, susturmadan ÖNCEKİ sinyalden yapılır ki eşik konuşmayı görüp tekrar açılabilsin.
+      if (S.aiActive && S.rnnoiseNode) {
+        S.meterSrc = S.rnnoiseNode; // gürültüsü temizlenmiş sinyal
+      } else {
+        // Ham iz susturulunca (enabled=false) sessizlik üretir; ölçüm için bağımsız bir kopya.
+        S.analysisTrack = S.track.clone();
+        S.analysisTrack.enabled = true;
+        S.meterSrc = S.ctx.createMediaStreamSource(new MediaStream([S.analysisTrack]));
+      }
       S.meterSrc.connect(S.meterNode);
     } catch (err) {
       console.warn('meter', err);
@@ -388,7 +501,10 @@
   function onLevel(rms) {
     const db = rms > 0 ? 20 * Math.log10(rms) : -100;
     S.level = db;
-    if (db >= S.gate) S.gateOpenUntil = now() + GATE_HOLD_MS;
+    const auto = autoGateActive();
+    const pass = auto ? S.vad >= AUTO_GATE_VAD && db >= AUTO_GATE_MIN_DB : db >= S.gate;
+    S.gateRun = pass ? S.gateRun + 1 : 0;
+    if (S.gateRun >= (auto ? AUTO_GATE_FRAMES : 1)) S.gateOpenUntil = now() + GATE_HOLD_MS;
     applyTransmit();
     const pct = Math.max(0, Math.min(100, ((db + 80) / 80) * 100));
     const fill = $('#meter-fill');
@@ -396,13 +512,37 @@
     setSpeaking(S.selfEl, S.transmitting && db > SPEAK_DB);
   }
 
+  function onVad(p) {
+    S.vad = p;
+  }
+
+  /** Şu an geçerli eşik (dB). Otomatik mod sadece yapay zekâ gürültü engelleme çalışırken devreye girer. */
+  function effectiveGate() {
+    if (S.autoGate) return S.aiActive ? AUTO_GATE_MIN_DB : GATE_OFF;
+    return S.gate;
+  }
+
+  /** Otomatik (konuşma algılamalı) eşik sadece yapay zekâ gürültü engelleme çalışırken devrededir. */
+  function autoGateActive() {
+    return S.autoGate && S.aiActive;
+  }
+
   function gateOpen() {
+    if (autoGateActive()) return now() < S.gateOpenUntil;
     return S.gate <= GATE_OFF || now() < S.gateOpenUntil;
   }
 
   function applyTransmit() {
     const want = !!S.track && !S.muted && !S.deafened && (S.mode === 'ptt' ? S.pttDown : gateOpen());
     if (S.track && S.track.enabled !== want) S.track.enabled = want;
+    if (S.sendGain) {
+      const g = want && S.aiActive ? 1 : 0;
+      if (S.sendGainTarget !== g) {
+        S.sendGainTarget = g;
+        // ~5 ms yumuşak geçiş: tık sesi olmasın
+        S.sendGain.gain.setTargetAtTime(g, S.ctx.currentTime, 0.005);
+      }
+    }
     S.transmitting = want;
     if (!want) setSpeaking(S.selfEl, false);
   }
@@ -577,6 +717,15 @@
       case 'chat':
         chatAppend(m.name, m.text, m.ts, false);
         break;
+      case 'music':
+        onMusic(m);
+        break;
+      case 'music-error':
+        toast(m.message || 'Müzik eklenemedi', 3500);
+        break;
+      case 'pong':
+        if (typeof m.serverNow === 'number') S.clockOffset = m.serverNow - Date.now();
+        break;
       case 'error':
         onServerError(m);
         break;
@@ -618,6 +767,7 @@
       }
     }
     if (first && S.peers.size === 0) chatAppend('', 'Odada şu an kimse yok. Linki arkadaşlarına gönder!', 0, true);
+    if (m.music) onMusic(m.music);
   }
 
   function onPeerJoined(info) {
@@ -1037,6 +1187,7 @@
     store.set('muted', S.muted);
     for (const p of S.peers.values()) applyPeerAudio(p);
     applyTransmit();
+    applyMusicVolume();
     renderSelf();
     publishState();
     (S.muted ? sfx.mute : sfx.unmute)();
@@ -1054,8 +1205,311 @@
     }
     for (const p of S.peers.values()) applyPeerAudio(p);
     applyTransmit();
+    applyMusicVolume();
     renderSelf();
     publishState();
+  }
+
+  // =====================================================================
+  // Müzik (ortak YouTube çalma listesi)
+  // Ses sunucudan yayınlanmaz: herkesin tarayıcısı aynı videoyu aynı saniyede çalar.
+  // Böylece müzik mikrofondan gönderilmez ve herkes kendi müzik sesini ayarlar.
+  // =====================================================================
+  const serverTime = () => Date.now() + S.clockOffset;
+
+  function musicPos(cur) {
+    if (cur.pausedAt != null) return cur.pausedAt;
+    return (serverTime() - cur.startedAt) / 1000;
+  }
+
+  function onMusic(m) {
+    if (typeof m.serverNow === 'number') S.clockOffset = m.serverNow - Date.now();
+    S.music = { queue: Array.isArray(m.queue) ? m.queue : [], current: m.current || null };
+    if (m.event) chatAppend('', m.event, 0, true);
+    renderMusic();
+    syncPlayer();
+  }
+
+  function renderMusic() {
+    const cur = S.music.current;
+    $('#now-playing').hidden = !cur;
+    $('#music-empty').hidden = !!cur;
+    if (cur) {
+      $('#np-title').textContent = cur.title;
+      $('#np-sub').textContent = (cur.author ? cur.author + ' · ' : '') + 'ekleyen: ' + cur.by;
+      $('#m-pause').textContent = cur.pausedAt != null ? '▶️' : '⏸️';
+      $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
+    }
+    const pill = $('#np-pill');
+    pill.hidden = !cur;
+    if (cur) pill.querySelector('span').textContent = cur.title;
+    $('#music-dot').hidden = !cur;
+
+    const list = $('#music-queue');
+    list.innerHTML = '';
+    for (const item of S.music.queue) {
+      const li = document.createElement('li');
+      const t = document.createElement('span');
+      t.className = 'q-title';
+      t.textContent = item.title;
+      const by = document.createElement('span');
+      by.className = 'q-by';
+      by.textContent = item.by;
+      const rm = document.createElement('button');
+      rm.className = 'btn tiny ghost';
+      rm.textContent = '✕';
+      rm.title = 'Sıradan çıkar';
+      rm.onclick = () => wsSend({ t: 'music-remove', key: item.key });
+      li.append(t, by, rm);
+      list.appendChild(li);
+    }
+    $('#queue-head').hidden = S.music.queue.length === 0;
+  }
+
+  let ytApi = null;
+  function loadYouTubeApi() {
+    if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
+    if (ytApi) return ytApi;
+    ytApi = new Promise((resolve, reject) => {
+      const prev = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => {
+        if (typeof prev === 'function') prev();
+        resolve(window.YT);
+      };
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      tag.async = true;
+      tag.onerror = () => reject(new Error('YouTube yüklenemedi'));
+      document.head.appendChild(tag);
+      setTimeout(() => reject(new Error('YouTube zaman aşımı')), 15000);
+    });
+    ytApi.catch(() => (ytApi = null));
+    return ytApi;
+  }
+
+  /** Oynatıcıyı ilk şarkıyla birlikte oluşturur (boş oluşturulan oynatıcı YouTube'da hata 2 verir). */
+  function ensurePlayer(cur) {
+    if (S.yt) return Promise.resolve(S.yt);
+    if (S.ytCreating) return S.ytCreating;
+    S.ytCreating = loadYouTubeApi()
+      .then(
+        (YT) =>
+          new Promise((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error('oynatıcı hazır olmadı')), 15000);
+            const pos = musicPos(cur);
+            const playNow = cur.pausedAt == null && pos >= 0;
+            S.ytKey = cur.key;
+            S.ytEndedSent = false;
+            const player = new YT.Player('yt-player', {
+              width: '100%',
+              height: '100%',
+              videoId: cur.id,
+              playerVars: {
+                autoplay: playNow ? 1 : 0,
+                start: Math.max(0, Math.floor(pos)),
+                controls: 0,
+                disablekb: 1,
+                playsinline: 1,
+                rel: 0,
+                iv_load_policy: 3,
+                cc_load_policy: 0,
+                origin: location.origin,
+              },
+              events: {
+                onReady: () => {
+                  clearTimeout(timer);
+                  S.yt = player;
+                  applyMusicVolume();
+                  resolve(player);
+                },
+                onStateChange: onYtState,
+                onError: onYtError,
+              },
+            });
+          })
+      )
+      .catch((err) => {
+        S.ytKey = null;
+        throw err;
+      })
+      .finally(() => (S.ytCreating = null));
+    return S.ytCreating;
+  }
+
+  function destroyPlayer() {
+    clearTimeout(S.ytStartTimer);
+    if (S.yt) {
+      try {
+        S.yt.destroy();
+      } catch {}
+    }
+    S.yt = null;
+    S.ytKey = null;
+    $('#player-box').innerHTML = '<div id="yt-player"></div>';
+  }
+
+  async function syncPlayer() {
+    const cur = S.music.current;
+    clearTimeout(S.ytStartTimer);
+    if (!cur) {
+      S.ytKey = null;
+      if (S.yt) {
+        try {
+          S.yt.stopVideo();
+        } catch {}
+      }
+      return;
+    }
+    let p;
+    try {
+      p = await ensurePlayer(cur);
+    } catch (err) {
+      console.warn('youtube', err);
+      $('#music-note').textContent = 'YouTube oynatıcısı yüklenemedi. Reklam engelleyici YouTube\'u engelliyor olabilir.';
+      $('#music-note').hidden = false;
+      return;
+    }
+    $('#music-note').hidden = true;
+    if (S.music.current !== cur) return; // bu arada değişti; yeni çağrı halleder
+    const YTS = window.YT.PlayerState;
+    const pos = musicPos(cur);
+
+    if (S.ytKey !== cur.key) {
+      S.ytKey = cur.key;
+      S.ytEndedSent = false;
+      if (cur.pausedAt != null || pos < 0) p.cueVideoById({ videoId: cur.id, startSeconds: Math.max(0, pos) });
+      else p.loadVideoById({ videoId: cur.id, startSeconds: pos });
+      if (pos < 0 && cur.pausedAt == null) S.ytStartTimer = setTimeout(syncPlayer, -pos * 1000);
+      return;
+    }
+
+    const st = p.getPlayerState();
+    if (cur.pausedAt != null) {
+      if (st === YTS.PLAYING || st === YTS.BUFFERING) p.pauseVideo();
+      if (Math.abs((p.getCurrentTime() || 0) - pos) > 1.5) p.seekTo(pos, true);
+      return;
+    }
+    if (pos < 0) {
+      S.ytStartTimer = setTimeout(syncPlayer, -pos * 1000);
+      return;
+    }
+    if (st === YTS.ENDED) {
+      // Güvenlik ağı: oynatıcı bitti ama sunucu hâlâ bu şarkıda (bildirim kaybolduysa
+      // ya da erken sayıldıysa) — her eşitlemede (5 sn) tekrar bildir.
+      let dur = 0;
+      try {
+        dur = p.getDuration();
+      } catch {}
+      if (dur > 0 && pos >= dur - 1) {
+        S.ytEndedSent = false;
+        onYtState({ data: YTS.ENDED });
+      }
+      return;
+    }
+    if (st !== YTS.PLAYING && st !== YTS.BUFFERING) {
+      if (Math.abs((p.getCurrentTime() || 0) - pos) > 1.5) p.seekTo(pos, true);
+      p.playVideo();
+    } else if (st === YTS.PLAYING && Math.abs(p.getCurrentTime() - pos) > 2) {
+      // Herkes aynı yerde olsun (kayma düzeltmesi)
+      p.seekTo(pos, true);
+    }
+  }
+
+  function onYtState(e) {
+    const cur = S.music.current;
+    if (!cur || S.ytKey !== cur.key) return;
+    if (e.data === window.YT.PlayerState.ENDED && !S.ytEndedSent) {
+      S.ytEndedSent = true;
+      let duration = null;
+      let videoId = null;
+      try {
+        duration = S.yt.getDuration();
+        videoId = S.yt.getVideoData().video_id;
+      } catch {}
+      console.info('müzik bitti bildirimi', JSON.stringify({ key: cur.key, id: cur.id, videoId, duration, pos: musicPos(cur) }));
+      // Oynatıcı başka bir videonun bitişini bildiriyorsa (geçiş anı) yok say
+      if (videoId && videoId !== cur.id) {
+        S.ytEndedSent = false;
+        return;
+      }
+      wsSend({ t: 'music-ended', key: cur.key, duration });
+    }
+  }
+
+  function onYtError(e) {
+    console.warn('YouTube oynatıcı hatası', e.data);
+    const cur = S.music.current;
+    if (!cur || S.ytKey !== cur.key) return;
+    // 2: geçersiz kimlik, 100: video yok/özel, 101/150: başka sitelerde oynatma kapalı
+    if ([2, 100, 101, 150].includes(e.data)) {
+      if (!S.ytEndedSent) {
+        S.ytEndedSent = true;
+        wsSend({ t: 'music-failed', key: cur.key });
+      }
+    } else {
+      toast('Müzik oynatılamadı (YouTube hata ' + e.data + ').', 3500);
+    }
+  }
+
+  function applyMusicVolume() {
+    $('#m-vol').value = S.musicVol;
+    if (!S.yt || !S.yt.setVolume) return;
+    try {
+      S.yt.setVolume(S.musicVol);
+      if (S.deafened || S.musicVol === 0) S.yt.mute();
+      else S.yt.unMute();
+    } catch {}
+  }
+
+  function setSideTab(name) {
+    for (const b of document.querySelectorAll('.side-tab')) b.classList.toggle('active', b.dataset.tab === name);
+    // Müzik sekmesi gizlenirken display:none yerine ekran dışına alınır ki oynatıcı çalmaya devam etsin.
+    $('#tab-chat').classList.toggle('tab-off', name !== 'chat');
+    $('#tab-music').classList.toggle('tab-off', name !== 'music');
+    if (name === 'chat') {
+      S.unread = 0;
+      $('#chat-badge').hidden = true;
+    }
+  }
+
+  function addMusic(url) {
+    url = (url || '').trim();
+    if (!url) return false;
+    if (!wsSend({ t: 'music-add', url })) {
+      toast('Sunucuya bağlı değil.');
+      return false;
+    }
+    return true;
+  }
+
+  /** Sohbet komutları: /play <link>, /skip, /stop, /pause, /resume */
+  function chatCommand(text) {
+    const [cmd, ...rest] = text.slice(1).split(/\s+/);
+    switch ((cmd || '').toLowerCase()) {
+      case 'play':
+      case 'p':
+      case 'çal':
+        addMusic(rest.join(' '));
+        return true;
+      case 'skip':
+      case 's':
+      case 'geç':
+        wsSend({ t: 'music-skip' });
+        return true;
+      case 'stop':
+      case 'dur':
+        wsSend({ t: 'music-stop' });
+        return true;
+      case 'pause':
+        wsSend({ t: 'music-pause' });
+        return true;
+      case 'resume':
+        wsSend({ t: 'music-resume' });
+        return true;
+      default:
+        toast('Komutlar: /play <youtube linki>, /skip, /stop, /pause, /resume', 4000);
+        return true;
+    }
   }
 
   function isTyping(e) {
@@ -1124,9 +1578,22 @@
     $('#ptt-hint').hidden = S.mode !== 'ptt';
     $('#ptt-key-btn').textContent = S.pttLabel;
     $('#gate-range').value = S.gate;
-    $('#gate-val').textContent = S.gate <= GATE_OFF ? '(kapalı)' : `(${S.gate} dB)`;
-    $('#gate-mark').style.left = ((S.gate + 80) / 80) * 100 + '%';
-    $('#ns-check').checked = S.ns;
+    const g = effectiveGate();
+    $('#auto-gate-check').checked = S.autoGate;
+    $('#gate-range').value = S.autoGate ? Math.max(g, GATE_OFF) : S.gate;
+    $('#gate-val').textContent = autoGateActive()
+      ? 'otomatik · konuşma algılama'
+      : S.autoGate
+        ? 'otomatik · yapay zekâ kapalıyken devre dışı'
+        : g <= GATE_OFF
+          ? 'kapalı'
+          : `${g} dB`;
+    $('#gate-val').textContent = '(' + $('#gate-val').textContent + ')';
+    $('#gate-mark').style.left = ((Math.max(g, GATE_OFF) + 80) / 80) * 100 + '%';
+    $('#ai-ns-check').checked = S.aiNs;
+    $('#ns-check').checked = S.ns && !S.aiNs;
+    $('#ns-check').disabled = S.aiNs;
+    $('#ns-check').parentElement.title = S.aiNs ? 'Yapay zekâ gürültü engelleme açıkken kapalıdır (ikisi birlikte daha kötü sonuç veriyor).' : '';
     $('#ec-check').checked = S.ec;
     $('#agc-check').checked = S.agc;
   }
@@ -1179,7 +1646,17 @@
     // AudioContext kullanıcı etkileşimi içinde oluşturulmalı.
     if (!S.ctx) {
       try {
-        S.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+        const AC = window.AudioContext || window.webkitAudioContext;
+        try {
+          // RNNoise 48 kHz ile çalışır
+          S.ctx = new AC({ latencyHint: 'interactive', sampleRate: 48000 });
+        } catch {
+          S.ctx = new AC({ latencyHint: 'interactive' });
+        }
+        S.ctx.onstatechange = () => {
+          // Ses bağlamı askıya alınırsa (uyku vb.) işlenmiş mikrofon sessizleşir; geri aç.
+          if (S.joined && S.ctx.state !== 'running' && S.ctx.state !== 'closed') S.ctx.resume().catch(() => {});
+        };
         if (S.outId && S.ctx.setSinkId) S.ctx.setSinkId(S.outId).catch(() => {});
       } catch {}
     }
@@ -1227,14 +1704,23 @@
       } catch {}
     }
     for (const p of [...S.peers.values()]) removePeer(p);
-    if (S.stream) S.stream.getTracks().forEach((t) => t.stop());
-    if (S.analysisTrack) S.analysisTrack.stop();
-    if (S.meterSrc) {
+    // Sadece ham mikrofonu kapat; işlenmiş iz (RNNoise çıkışı) sonraki katılımda tekrar kullanılır.
+    if (S.rawStream) S.rawStream.getTracks().forEach((t) => t.stop());
+    if (S.procSrc) {
       try {
-        S.meterSrc.disconnect();
+        S.procSrc.disconnect();
       } catch {}
     }
-    S.stream = S.track = S.analysisTrack = S.meterSrc = null;
+    if (S.analysisTrack) S.analysisTrack.stop();
+    if (S.meterSrc && S.meterNode) {
+      try {
+        S.meterSrc.disconnect(S.meterNode);
+      } catch {}
+    }
+    S.stream = S.track = S.analysisTrack = S.meterSrc = S.rawStream = S.rawTrack = S.procSrc = null;
+    S.music = { queue: [], current: null };
+    destroyPlayer();
+    renderMusic();
     if (S.selfEl) S.selfEl.remove();
     S.selfEl = null;
     S.id = randomId(); // yeni katılım = yeni kimlik
@@ -1304,7 +1790,7 @@
     $('#chat-btn').onclick = () => {
       const panel = $('#chat-panel');
       panel.classList.toggle('open');
-      if (panel.classList.contains('open')) {
+      if (panel.classList.contains('open') && !$('#tab-chat').classList.contains('tab-off')) {
         S.unread = 0;
         $('#chat-badge').hidden = true;
         $('#chat-input').focus();
@@ -1315,9 +1801,40 @@
       const input = $('#chat-input');
       const text = input.value.trim();
       if (!text) return;
+      if (text.startsWith('/')) {
+        chatCommand(text);
+        input.value = '';
+        return;
+      }
       if (!wsSend({ t: 'chat', text })) return toast('Sunucuya bağlı değil, mesaj gönderilemedi.');
       input.value = '';
     });
+
+    // Yan panel sekmeleri + müzik
+    for (const b of document.querySelectorAll('.side-tab')) b.onclick = () => setSideTab(b.dataset.tab);
+    $('#np-pill').onclick = () => {
+      setSideTab('music');
+      $('#chat-panel').classList.add('open');
+    };
+    $('#music-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (addMusic($('#music-input').value)) $('#music-input').value = '';
+    });
+    $('#m-pause').onclick = () => {
+      const cur = S.music.current;
+      if (cur) wsSend({ t: cur.pausedAt != null ? 'music-resume' : 'music-pause' });
+    };
+    $('#m-skip').onclick = () => wsSend({ t: 'music-skip' });
+    $('#m-stop').onclick = () => wsSend({ t: 'music-stop' });
+    $('#m-vol').oninput = (e) => {
+      S.musicVol = Number(e.target.value);
+      store.set('musicVol', S.musicVol);
+      applyMusicVolume();
+    };
+    applyMusicVolume();
+    setInterval(() => {
+      if (S.joined && S.music.current && S.yt) syncPlayer();
+    }, 5000);
 
     // Ayarlar
     const dlg = $('#settings-dialog');
@@ -1351,9 +1868,24 @@
       $('#ptt-key-btn').textContent = 'Bir tuşa bas…';
     };
     $('#gate-range').oninput = (e) => {
+      // Kaydırıcıyı elle oynatmak manuel moda geçirir
       S.gate = Number(e.target.value);
+      S.autoGate = false;
       store.set('gate', S.gate);
+      store.set('autoGate', false);
       renderSettings();
+    };
+    $('#auto-gate-check').onchange = (e) => {
+      S.autoGate = e.target.checked;
+      store.set('autoGate', S.autoGate);
+      renderSettings();
+    };
+    $('#ai-ns-check').onchange = (e) => {
+      S.aiNs = e.target.checked;
+      store.set('aiNs', S.aiNs);
+      renderSettings();
+      // Tarayıcının gürültü engellemesi de değiştiği için mikrofon yeniden açılır
+      if (S.joined && S.rawTrack) switchMic().then(renderSettings);
     };
     for (const [id, key] of [
       ['#ns-check', 'ns'],

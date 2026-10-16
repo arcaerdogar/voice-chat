@@ -18,8 +18,10 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
 
 ## Özellikler
 
-- Opus ses, yankı/gürültü engelleme, otomatik kazanç (ayarlardan kapatılabilir)
-- **Ses eşiği** (noise gate): klavye/fan sesi gönderilmez. Sekme arka plandayken de çalışır (AudioWorklet)
+- Opus ses, yankı engelleme, otomatik kazanç (ayarlardan kapatılabilir)
+- **Yapay zekâ gürültü engelleme (RNNoise)**: hoparlörden mikrofona giren oyun efektleri, klavye, fan sesi silinir; konuşma korunur
+- **Otomatik ses eşiği**: konuşmadığın anlarda mikrofon tamamen susar (RNNoise'un konuşma algılamasıyla). Sekme arka plandayken de çalışır (AudioWorklet)
+- **Müzik botu**: YouTube linki ekle, odadaki herkeste aynı anda çalar. Ortak sıra, duraklat/geç/durdur, kişisel müzik sesi, sohbette `/play`, `/skip`, `/stop`, `/pause`, `/resume`
 - Açık mikrofon veya bas-konuş (klavye tuşu ya da farenin yan tuşları)
 - Kişi bazlı ses seviyesi ve yerel susturma
 - Konuşan kişinin kartı yeşil parlar, her kişinin gecikmesi (ms) ve bağlantının röle (TURN) üzerinden olup olmadığı görünür
@@ -33,7 +35,36 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
 - **Chrome veya Edge** önerilir. Sekmeyi açık bırakın (küçültebilirsiniz).
 - Tarayıcılar, oyun tam ekrandayken klavyeyi dinleyemez. Bu yüzden **bas-konuş yalnızca sekme odaktayken çalışır**.
   Oyunda **Açık mikrofon + Ses eşiği** kullanın: Ayarlar → Ses eşiğini, konuşmadığınızda çubuğun hemen sağına gelecek şekilde ayarlayın.
-- Yankı olmaması için kulaklık kullanın.
+- Hoparlörden oyun oynuyorsanız **Yapay zekâ gürültü engelleme** ve **Otomatik eşik** açık kalsın (varsayılan).
+  En iyi sonuç yine de kulaklıkla alınır.
+
+## Gürültü engelleme: ne yapar, ne yapamaz?
+
+Tarayıcının yankı engellemesi sadece tarayıcının kendi çaldığı sesi (arkadaşlarının sesi) bilir; oyunun sesini bilemez.
+Bu yüzden mikrofon sesi gönderilmeden önce RNNoise'dan (konuşmayı tanıyan küçük bir yapay sinir ağı) geçirilir.
+
+Ölçüm (`test/noise.test.js`, gerçek Chrome, karşı tarafın duyduğu seviye):
+
+| Mikrofona giren | Kapalı | Açık |
+|---|---|---|
+| Oyun efektleri (patlama, vuruş, rüzgâr, klavye) | -34 dB | **-100 dB** (sessizlik, mikrofon %0 açık) |
+| Konuşma | -21 dB | -21 dB (kayıp yok) |
+
+Sınırlar:
+- **Konuşma içeren oyun sesleri** (şampiyon replikleri, duyurucu) ve **vokalli müzik** konuşma gibi algılanabilir ve kısmen geçebilir.
+- Siz konuşurken arkadaki oyun sesi azalır ama tamamen sıfırlanmaz.
+- Yapay zekâ engelleme açıkken tarayıcının kendi gürültü engellemesi kapatılır; ikisi birlikte çalışınca sonuç ölçülebilir şekilde kötüleşiyor.
+
+## Müzik botu nasıl çalışır?
+
+Ses sunucudan yayınlanmaz. Sunucu sadece ortak sırayı ve "şu şarkı şu saniyede başladı" bilgisini tutar;
+herkesin tarayıcısı resmi YouTube oynatıcısıyla aynı videoyu aynı konumda çalar (±2 sn içinde senkron).
+Böylece sunucuya yük binmez, müzik mikrofondan gönderilmez ve herkes müzik sesini kendisi ayarlar.
+
+- Sadece YouTube linkleri desteklenir (`youtube.com/watch`, `youtu.be`, `music.youtube.com`, `shorts`).
+- Sahibi "başka sitelerde oynatma"yı kapatmış videolar eklenirken reddedilir; oynatılamayan video otomatik geçilir.
+- Kulaklık (sağırlaştırma) müziği de susturur. YouTube'u engelleyen reklam engelleyiciler oynatıcıyı durdurabilir.
+- Sunucu yeniden başlarsa sıra sıfırlanır (sesli sohbet etkilenmez).
 
 ## Yerelde çalıştırma
 
@@ -95,6 +126,8 @@ Metered (https://www.metered.ca/stun-turn, ücretsiz katman) veya kendi coturn s
 npm run test:server   # sunucu protokol testleri
 npm run test:e2e      # gerçek Chrome/Edge ile uçtan uca testler (sahte mikrofon)
 npm run test:turn     # gerçek coturn (Docker) ile röle testi
+npm run test:noise    # yapay zekâ gürültü engelleme ölçümü
+npm run test:music    # gerçek YouTube oynatıcısıyla müzik testi (YouTube erişilemezse atlanır)
 npm test              # hepsi (Docker yoksa TURN testi atlanır)
 ```
 
@@ -111,5 +144,6 @@ Uçtan uca testler kurulu Chrome'u veya Edge'i kullanır.
 - `server.js`: statik dosyalar, `/healthz`, `/ws` sinyal sunucusu. Odalar bellekte tutulur.
 - `public/app.js`: istemci (WebRTC mesh, perfect negotiation, yeniden bağlanma, bekçi, ses eşiği).
 - `public/meter-worklet.js`: mikrofon seviyesi ölçer (ses iş parçacığında çalışır).
+- `public/vendor/rnnoise/`: RNNoise (WebAssembly) gürültü engelleme; @sapphi-red/web-noise-suppressor'dan alınmıştır, konuşma olasılığını iletmek için küçük bir yama içerir (bkz. README.txt).
 
 Mesh yapısı 2–8 kişilik oyun grupları için idealdir (LoL takımı 5 kişi). Çok daha büyük kanallar için SFU gerekir.

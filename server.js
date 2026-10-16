@@ -23,6 +23,8 @@ const MIME = {
   '.ico': 'image/x-icon',
   '.json': 'application/json; charset=utf-8',
   '.webmanifest': 'application/manifest+json',
+  '.wasm': 'application/wasm',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 const ROOM_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -63,12 +65,89 @@ function buildIceServers(env) {
   return servers;
 }
 
+// ---------- Müzik (ortak YouTube çalma listesi) ----------
+
+function parseYouTubeId(input) {
+  if (typeof input !== 'string') return null;
+  const text = input.trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(text)) return text;
+  let url;
+  try {
+    url = new URL(text.startsWith('http') ? text : 'https://' + text);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/^(www|m|music)\./, '');
+  let id = null;
+  if (host === 'youtu.be') id = url.pathname.slice(1).split('/')[0];
+  else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    if (url.pathname === '/watch') id = url.searchParams.get('v');
+    else {
+      const m = url.pathname.match(/^\/(shorts|embed|live|v)\/([^/?#]+)/);
+      if (m) id = m[2];
+    }
+  }
+  return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+}
+
+/**
+ * YouTube oEmbed ile başlık al. 401/403 = sahibi başka sitelerde oynatmayı kapatmış,
+ * 404/400 = video yok. Ağ hatasında videoyu yine de kabul ederiz.
+ */
+async function fetchYouTubeInfo(id) {
+  const url = 'https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + id);
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+    if (res.status === 401 || res.status === 403) return { error: 'Bu video başka sitelerde oynatılmaya kapalı (sahibi engellemiş).' };
+    if (res.status === 404 || res.status === 400) return { error: 'Video bulunamadı.' };
+    if (!res.ok) return { title: null };
+    const j = await res.json();
+    return {
+      title: typeof j.title === 'string' ? j.title.slice(0, 120) : null,
+      author: typeof j.author_name === 'string' ? j.author_name.slice(0, 60) : null,
+    };
+  } catch {
+    return { title: null };
+  }
+}
+
+const MUSIC_QUEUE_MAX = 50;
+const MUSIC_START_DELAY_MS = 1500; // herkes videoyu yükleyebilsin diye şarkı biraz ileride başlar
+
 function createServer(options = {}) {
   const env = options.env || process.env;
   const maxRoomSize = options.maxRoomSize || Number(env.MAX_ROOM_SIZE) || 12;
   const graceMs = options.graceMs ?? (Number(env.RECONNECT_GRACE_MS) || 20000);
   const heartbeatMs = options.heartbeatMs || 15000;
   const log = options.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a);
+  const getVideoInfo = options.fetchVideoInfo || fetchYouTubeInfo;
+
+  /** Oda başına müzik durumu: { queue: [...], current: {..., startedAt, pausedAt} | null } */
+  const music = new Map();
+
+  function musicOf(roomName) {
+    let m = music.get(roomName);
+    if (!m) {
+      m = { queue: [], current: null };
+      music.set(roomName, m);
+    }
+    return m;
+  }
+
+  function musicSnapshot(roomName) {
+    const m = music.get(roomName);
+    return { queue: m ? m.queue : [], current: m ? m.current : null, serverNow: Date.now() };
+  }
+
+  function broadcastMusic(roomName, event) {
+    broadcast(roomName, { t: 'music', ...musicSnapshot(roomName), event: event || null });
+  }
+
+  function playNext(roomName) {
+    const m = musicOf(roomName);
+    const next = m.queue.shift();
+    m.current = next ? { ...next, startedAt: Date.now() + MUSIC_START_DELAY_MS, pausedAt: null } : null;
+  }
 
   /** @type {Map<string, Map<string, Member>>} */
   const rooms = new Map();
@@ -86,7 +165,8 @@ function createServer(options = {}) {
 
   function securityHeaders(res) {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'no-referrer');
+    // YouTube gömülü oynatıcısı Referer ister (yoksa "Hata 153"); sadece origin gönderilir.
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Permissions-Policy', 'microphone=(self), camera=()');
   }
@@ -169,7 +249,10 @@ function createServer(options = {}) {
     if (!m) return;
     clearTimeout(m.graceTimer);
     room.delete(id);
-    if (room.size === 0) rooms.delete(roomName);
+    if (room.size === 0) {
+      rooms.delete(roomName);
+      music.delete(roomName);
+    }
     broadcast(roomName, { t: 'peer-left', id });
     log(`leave room=${roomName} id=${id} size=${room.size}`);
   }
@@ -184,6 +267,7 @@ function createServer(options = {}) {
     let windowStart = Date.now();
     let windowCount = 0;
     let chatTimes = [];
+    let musicTimes = [];
 
     /** Bu soket şu an hangi üyeye bağlı */
     let member = null;
@@ -207,7 +291,7 @@ function createServer(options = {}) {
 
       switch (msg.t) {
         case 'ping':
-          send(ws, { t: 'pong' });
+          send(ws, { t: 'pong', serverNow: Date.now() });
           return;
 
         case 'join': {
@@ -274,7 +358,7 @@ function createServer(options = {}) {
 
           const peers = [];
           for (const m of room.values()) if (m.id !== id) peers.push(publicMember(m));
-          send(ws, { t: 'welcome', id, room: roomName, peers, iceServers: buildIceServers(env) });
+          send(ws, { t: 'welcome', id, room: roomName, peers, iceServers: buildIceServers(env), music: musicSnapshot(roomName) });
           return;
         }
 
@@ -305,6 +389,101 @@ function createServer(options = {}) {
           chatTimes.push(now);
           const out = { t: 'chat', from: member.id, name: member.name, text, ts: now };
           broadcast(member.room, out);
+          return;
+        }
+
+        case 'music-add': {
+          if (!member || member.ws !== ws) return;
+          const id = parseYouTubeId(msg.url);
+          if (!id) {
+            send(ws, { t: 'music-error', message: 'Geçerli bir YouTube linki değil.' });
+            return;
+          }
+          musicTimes = musicTimes.filter((t) => now - t < 10000);
+          if (musicTimes.length >= 5) {
+            send(ws, { t: 'music-error', message: 'Çok hızlı ekliyorsun, biraz bekle.' });
+            return;
+          }
+          musicTimes.push(now);
+          if (musicOf(member.room).queue.length >= MUSIC_QUEUE_MAX) {
+            send(ws, { t: 'music-error', message: `Sıra dolu (en fazla ${MUSIC_QUEUE_MAX} şarkı).` });
+            return;
+          }
+          const adder = member;
+          Promise.resolve(getVideoInfo(id))
+            .then((info) => {
+              // Bu sırada kişi ayrılmış veya oda kapanmış olabilir
+              const room = rooms.get(adder.room);
+              if (!room || room.get(adder.id) !== adder) return;
+              if (info && info.error) {
+                send(adder.ws, { t: 'music-error', message: info.error });
+                return;
+              }
+              const m = musicOf(adder.room);
+              if (m.queue.length >= MUSIC_QUEUE_MAX) return;
+              const item = {
+                key: crypto.randomBytes(6).toString('hex'),
+                id,
+                title: (info && info.title) || `YouTube videosu (${id})`,
+                author: (info && info.author) || null,
+                by: adder.name,
+              };
+              m.queue.push(item);
+              const startNow = !m.current;
+              if (startNow) playNext(adder.room);
+              broadcastMusic(adder.room, startNow ? `🎵 ${adder.name} çalıyor: ${item.title}` : `🎵 ${adder.name} sıraya ekledi: ${item.title}`);
+            })
+            .catch((err) => log('music-add', err));
+          return;
+        }
+
+        case 'music-skip':
+        case 'music-stop':
+        case 'music-pause':
+        case 'music-resume':
+        case 'music-remove':
+        case 'music-ended':
+        case 'music-failed': {
+          if (!member || member.ws !== ws) return;
+          const m = music.get(member.room);
+          if (!m) return;
+          const cur = m.current;
+          let event = null;
+          if (msg.t === 'music-skip') {
+            if (!cur) return;
+            playNext(member.room);
+            event = `⏭️ ${member.name} geçti: ${cur.title}`;
+          } else if (msg.t === 'music-stop') {
+            if (!cur && !m.queue.length) return;
+            m.queue = [];
+            m.current = null;
+            event = `⏹️ ${member.name} müziği durdurdu`;
+          } else if (msg.t === 'music-pause') {
+            if (!cur || cur.pausedAt != null) return;
+            cur.pausedAt = Math.max(0, (now - cur.startedAt) / 1000);
+            event = `⏸️ ${member.name} duraklattı`;
+          } else if (msg.t === 'music-resume') {
+            if (!cur || cur.pausedAt == null) return;
+            cur.startedAt = now - cur.pausedAt * 1000;
+            cur.pausedAt = null;
+            event = `▶️ ${member.name} devam ettirdi`;
+          } else if (msg.t === 'music-remove') {
+            const i = m.queue.findIndex((q) => q.key === msg.key);
+            if (i < 0) return;
+            const [removed] = m.queue.splice(i, 1);
+            event = `🗑️ ${member.name} sıradan çıkardı: ${removed.title}`;
+          } else {
+            // music-ended / music-failed: herkes bildirir ama sadece şu anki şarkı için bir kez işlenir
+            if (!cur || msg.key !== cur.key) return;
+            // Şarkı süresi dolmadan gelen "bitti" bildirimi (hatalı/eski oynatıcı durumu) yok sayılır
+            if (msg.t === 'music-ended' && cur.pausedAt == null && typeof msg.duration === 'number' && msg.duration > 0) {
+              const elapsed = (now - cur.startedAt) / 1000;
+              if (elapsed < msg.duration - 5) return;
+            }
+            playNext(member.room);
+            if (msg.t === 'music-failed') event = `⚠️ Oynatılamadı, geçildi: ${cur.title}`;
+          }
+          broadcastMusic(member.room, event);
           return;
         }
 
@@ -364,7 +543,7 @@ function createServer(options = {}) {
   return { server, wss, rooms, close };
 }
 
-module.exports = { createServer, buildIceServers, normalizeRoom, cleanName };
+module.exports = { createServer, buildIceServers, normalizeRoom, cleanName, parseYouTubeId };
 
 if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;

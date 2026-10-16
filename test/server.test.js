@@ -221,3 +221,122 @@ test('TURN ayarları ortam değişkenlerinden okunur', () => {
   assert.ok(rest[1].credential.length > 10);
   assert.equal(buildIceServers({}).length, 1);
 });
+
+test('Müzik: YouTube linki ayrıştırma', () => {
+  const { parseYouTubeId } = require('../server');
+  const id = 'dQw4w9WgXcQ';
+  for (const u of [
+    `https://www.youtube.com/watch?v=${id}&list=PL1`,
+    `youtu.be/${id}?t=30`,
+    `https://music.youtube.com/watch?v=${id}`,
+    `https://youtube.com/shorts/${id}`,
+    `https://m.youtube.com/watch?v=${id}`,
+    id,
+  ]) {
+    assert.equal(parseYouTubeId(u), id, u);
+  }
+  for (const u of ['https://evil.com/watch?v=' + id, 'merhaba', '', 'https://youtube.com/watch?v=kisa', null]) {
+    assert.equal(parseYouTubeId(u), null, String(u));
+  }
+});
+
+test('Müzik: sıra, çalma, duraklatma, geçme, bitiş ve hatalar', async () => {
+  const titles = { aaaaaaaaaaa: 'Şarkı A', bbbbbbbbbbb: 'Şarkı B', ccccccccccc: 'Şarkı C' };
+  const srv = await start({
+    fetchVideoInfo: async (id) => (id === 'kapalikapal' ? { error: 'Bu video başka sitelerde oynatılmaya kapalı.' } : { title: titles[id] || null, author: 'Sanatçı' }),
+  });
+  try {
+    const a = await client(srv);
+    a.send({ t: 'join', room: 'muzik', id: ID_A, name: 'Ali' });
+    const wa = await a.wait((m) => m.t === 'welcome');
+    assert.deepEqual(wa.music.queue, []);
+    assert.equal(wa.music.current, null);
+    assert.equal(typeof wa.music.serverNow, 'number');
+
+    a.send({ t: 'music-add', url: 'https://youtu.be/aaaaaaaaaaa' });
+    const m1 = await a.wait((m) => m.t === 'music');
+    assert.equal(m1.current.title, 'Şarkı A');
+    assert.equal(m1.current.by, 'Ali');
+    assert.equal(m1.current.pausedAt, null);
+    assert.ok(m1.current.startedAt > m1.serverNow, 'şarkı herkes yükleyebilsin diye biraz ileride başlamalı');
+    assert.match(m1.event, /çalıyor/);
+
+    // Geç katılan kişi o anki durumu alır
+    const b = await client(srv);
+    b.send({ t: 'join', room: 'muzik', id: ID_B, name: 'Berk' });
+    const wb = await b.wait((m) => m.t === 'welcome');
+    assert.equal(wb.music.current.key, m1.current.key);
+
+    b.send({ t: 'music-add', url: 'https://www.youtube.com/watch?v=bbbbbbbbbbb' });
+    const m2 = await a.wait((m) => m.t === 'music' && m.queue.length === 1);
+    assert.equal(m2.queue[0].title, 'Şarkı B');
+    assert.equal(m2.current.title, 'Şarkı A');
+    await b.wait((m) => m.t === 'music');
+
+    // Duraklat / devam
+    a.send({ t: 'music-pause' });
+    const p = await b.wait((m) => m.t === 'music' && m.current.pausedAt != null);
+    assert.ok(p.current.pausedAt >= 0);
+    a.send({ t: 'music-pause' }); // ikinci kez: yok sayılır
+    a.send({ t: 'music-resume' });
+    const r = await b.wait((m) => m.t === 'music' && m.current.pausedAt == null);
+    assert.match(r.event, /devam/);
+
+    // Süresi dolmamış şarkı için "bitti" bildirimi yok sayılır (ör. 200 sn'lik şarkı 1 sn'de bitmez)
+    a.send({ t: 'music-ended', key: m1.current.key, duration: 200 });
+    a.send({ t: 'ping' });
+    await a.wait((m) => m.t === 'pong');
+    await new Promise((res) => setTimeout(res, 50));
+    assert.ok(!b.msgs.some((m) => m.t === 'music' && m.current && m.current.title === 'Şarkı B'), 'erken bitiş kabul edilmemeli');
+
+    // Bitiş bildirimi: yanlış anahtar yok sayılır, doğru anahtar sıradakine geçer, tekrar bildirim etkisiz
+    a.send({ t: 'music-ended', key: 'yanlis' });
+    a.send({ t: 'music-ended', key: m1.current.key });
+    b.send({ t: 'music-ended', key: m1.current.key });
+    const next = await b.wait((m) => m.t === 'music' && m.current && m.current.title === 'Şarkı B');
+    assert.equal(next.queue.length, 0);
+    await new Promise((res) => setTimeout(res, 100));
+    assert.equal(srv.rooms.size, 1);
+
+    // Sıraya ekle + çıkar
+    a.send({ t: 'music-add', url: 'ccccccccccc' });
+    const withC = await b.wait((m) => m.t === 'music' && m.queue.length === 1);
+    b.send({ t: 'music-remove', key: withC.queue[0].key });
+    const removed = await a.wait((m) => m.t === 'music' && m.queue.length === 0 && /çıkardı/.test(m.event || ''));
+    assert.match(removed.event, /Şarkı C/);
+
+    // Oynatılamayan video geçilir
+    b.send({ t: 'music-failed', key: next.current.key });
+    const failed = await a.wait((m) => m.t === 'music' && m.current === null);
+    assert.match(failed.event, /Oynatılamadı/);
+
+    // Hatalı / engelli linkler
+    a.send({ t: 'music-add', url: 'bu bir link değil' });
+    assert.match((await a.wait((m) => m.t === 'music-error')).message, /YouTube linki/);
+    a.send({ t: 'music-add', url: 'https://youtu.be/kapalikapal' });
+    assert.match((await a.wait((m) => m.t === 'music-error')).message, /kapalı/);
+
+    // Geç + durdur
+    a.send({ t: 'music-add', url: 'aaaaaaaaaaa' });
+    a.send({ t: 'music-add', url: 'bbbbbbbbbbb' });
+    await b.wait((m) => m.t === 'music' && m.queue.length === 1);
+    b.send({ t: 'music-skip' });
+    const skipped = await a.wait((m) => m.t === 'music' && /geçti/.test(m.event || ''));
+    assert.equal(skipped.current.title, 'Şarkı B');
+    b.send({ t: 'music-stop' });
+    const stopped = await a.wait((m) => m.t === 'music' && m.current === null && m.queue.length === 0);
+    assert.match(stopped.event, /durdurdu/);
+
+    // Hız sınırı
+    for (let i = 0; i < 6; i++) b.send({ t: 'music-add', url: 'aaaaaaaaaaa' });
+    assert.match((await b.wait((m) => m.t === 'music-error')).message, /hızlı/);
+
+    // Oda boşalınca müzik durumu silinir
+    a.close();
+    b.close();
+    await new Promise((res) => setTimeout(res, 800));
+    assert.equal(srv.rooms.size, 0);
+  } finally {
+    await srv.close();
+  }
+});

@@ -32,6 +32,8 @@ async function launch() {
 
 async function join(browser, name) {
   const ctx = await browser.newContext({ permissions: ['microphone'] });
+  // Bu testler bağlantıyı sınar; sahte mikrofonun bip sesi otomatik eşiği açıp kapatmasın.
+  await ctx.addInitScript(() => localStorage.setItem('rv:autoGate', 'false'));
   const page = await ctx.newPage();
   page.errors = [];
   page.on('pageerror', (e) => page.errors.push(String(e)));

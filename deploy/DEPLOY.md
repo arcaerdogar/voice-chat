@@ -81,7 +81,12 @@ sudo docker compose up -d --build
 TURN'ü ilk kez ekliyorsan ayrıca **adım 1'deki IP kontrolünü** ve **adım 5'i (firewall)** yap,
 sonra **adım 6'daki TURN testini** uygula. Nginx ve sertifika adımları tekrar gerekmez.
 
-Güncelleme sırasında devam eden konuşmalar kesilmez (ses P2P akar).
+Güncelleme sırasında devam eden konuşmalar kesilmez (ses P2P akar). Odadakiler yeni özellikleri
+görmek için sayfayı bir kez yenilemeli.
+
+Not: Müzik botu, eklenen videonun başlığını almak için sunucudan `https://www.youtube.com` adresine
+istek atar. Sunucunun dışarıya HTTPS çıkışı kapalıysa müzik yine çalışır, sadece başlık yerine
+"YouTube videosu (kimlik)" yazar.
 
 ## Domain geri geldiğinde
 1. `/etc/nginx/conf.d/riftvoice.conf` içinde iki `server_name` satırını domain ile değiştir (ör. `voice.ituacm.com`).
