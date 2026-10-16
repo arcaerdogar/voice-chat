@@ -113,6 +113,18 @@ async function fetchYouTubeInfo(id) {
 
 const MUSIC_QUEUE_MAX = 50;
 const MUSIC_START_DELAY_MS = 1500; // herkes videoyu yükleyebilsin diye şarkı biraz ileride başlar
+// Şarkı, bilinen süresi + bu pay dolunca sunucu tarafından geçilir. Pay, reklam izleyen
+// birinin gerçek süreyi bildirmesine ve yavaş yükleyenlere zaman tanır.
+const MUSIC_END_GRACE_MS = 8000;
+
+/** YouTube oynatıcı hata kodlarının açıklaması */
+function youtubeErrorText(code) {
+  if (code === 101 || code === 150 || code === 152) return 'YouTube bu videonun başka sitelerde oynatılmasına izin vermiyor (telif ya da yaş sınırı)';
+  if (code === 100) return 'video kaldırılmış ya da gizli';
+  if (code === 2) return 'geçersiz video';
+  if (code === 5) return 'tarayıcı bu videoyu oynatamadı';
+  return 'YouTube hatası' + (code != null ? ' ' + code : '');
+}
 
 function createServer(options = {}) {
   const env = options.env || process.env;
@@ -121,6 +133,8 @@ function createServer(options = {}) {
   const heartbeatMs = options.heartbeatMs || 15000;
   const log = options.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a);
   const getVideoInfo = options.fetchVideoInfo || fetchYouTubeInfo;
+  const musicStartDelay = options.musicStartDelayMs ?? MUSIC_START_DELAY_MS;
+  const musicEndGrace = options.musicEndGraceMs ?? MUSIC_END_GRACE_MS;
 
   /** Oda başına müzik durumu: { queue: [...], current: {..., startedAt, pausedAt} | null } */
   const music = new Map();
@@ -146,7 +160,39 @@ function createServer(options = {}) {
   function playNext(roomName) {
     const m = musicOf(roomName);
     const next = m.queue.shift();
-    m.current = next ? { ...next, startedAt: Date.now() + MUSIC_START_DELAY_MS, pausedAt: null } : null;
+    m.current = next ? { ...next, startedAt: Date.now() + musicStartDelay, pausedAt: null, duration: null } : null;
+    m.failedBy = new Set();
+    scheduleMusicEnd(roomName);
+  }
+
+  /**
+   * Şarkının bitişini sunucu yönetir: süre bilindiğinde, süre + pay dolunca sıradakine geçer.
+   * Böylece istemcilerin "bitti" bildirimi kaybolsa ya da hatalı gelse (ör. reklam bitişi)
+   * müzik ne takılır ne de erken kesilir.
+   */
+  function scheduleMusicEnd(roomName) {
+    const m = music.get(roomName);
+    if (!m) return;
+    clearTimeout(m.endTimer);
+    m.endTimer = null;
+    const cur = m.current;
+    if (!cur || cur.pausedAt != null || !cur.duration) return;
+    const at = cur.startedAt + cur.duration * 1000 + musicEndGrace;
+    const key = cur.key;
+    m.endTimer = setTimeout(() => {
+      const mm = music.get(roomName);
+      if (!mm || !mm.current || mm.current.key !== key || mm.current.pausedAt != null) return;
+      playNext(roomName);
+      broadcastMusic(roomName, null);
+    }, Math.max(0, at - Date.now()));
+    if (m.endTimer.unref) m.endTimer.unref();
+  }
+
+  function onlineCount(roomName) {
+    const room = rooms.get(roomName);
+    let n = 0;
+    if (room) for (const mm of room.values()) if (mm.online) n++;
+    return n;
   }
 
   /** @type {Map<string, Map<string, Member>>} */
@@ -251,6 +297,8 @@ function createServer(options = {}) {
     room.delete(id);
     if (room.size === 0) {
       rooms.delete(roomName);
+      const m = music.get(roomName);
+      if (m) clearTimeout(m.endTimer);
       music.delete(roomName);
     }
     broadcast(roomName, { t: 'peer-left', id });
@@ -437,6 +485,21 @@ function createServer(options = {}) {
           return;
         }
 
+        case 'music-duration': {
+          // İstemciler oynatıcının bildirdiği süreyi gönderir. Reklam sırasında reklamın
+          // süresi gelebilir; bu yüzden en büyük değer geçerlidir.
+          if (!member || member.ws !== ws) return;
+          const m = music.get(member.room);
+          const cur = m && m.current;
+          const d = Number(msg.duration);
+          if (!cur || msg.key !== cur.key || !Number.isFinite(d) || d < 1 || d > 12 * 3600) return;
+          if (cur.duration && d <= cur.duration + 0.5) return;
+          cur.duration = Math.round(d * 10) / 10;
+          scheduleMusicEnd(member.room);
+          broadcastMusic(member.room, null);
+          return;
+        }
+
         case 'music-skip':
         case 'music-stop':
         case 'music-pause':
@@ -457,15 +520,18 @@ function createServer(options = {}) {
             if (!cur && !m.queue.length) return;
             m.queue = [];
             m.current = null;
+            scheduleMusicEnd(member.room);
             event = `⏹️ ${member.name} müziği durdurdu`;
           } else if (msg.t === 'music-pause') {
             if (!cur || cur.pausedAt != null) return;
             cur.pausedAt = Math.max(0, (now - cur.startedAt) / 1000);
+            scheduleMusicEnd(member.room);
             event = `⏸️ ${member.name} duraklattı`;
           } else if (msg.t === 'music-resume') {
             if (!cur || cur.pausedAt == null) return;
             cur.startedAt = now - cur.pausedAt * 1000;
             cur.pausedAt = null;
+            scheduleMusicEnd(member.room);
             event = `▶️ ${member.name} devam ettirdi`;
           } else if (msg.t === 'music-remove') {
             const i = m.queue.findIndex((q) => q.key === msg.key);
@@ -473,15 +539,29 @@ function createServer(options = {}) {
             const [removed] = m.queue.splice(i, 1);
             event = `🗑️ ${member.name} sıradan çıkardı: ${removed.title}`;
           } else {
-            // music-ended / music-failed: herkes bildirir ama sadece şu anki şarkı için bir kez işlenir
+            // music-ended / music-failed: sadece şu anki şarkı için ve bir kez işlenir
             if (!cur || msg.key !== cur.key) return;
-            // Şarkı süresi dolmadan gelen "bitti" bildirimi (hatalı/eski oynatıcı durumu) yok sayılır
-            if (msg.t === 'music-ended' && cur.pausedAt == null && typeof msg.duration === 'number' && msg.duration > 0) {
+            if (msg.t === 'music-ended') {
+              // Süresi dolmadan gelen "bitti" bildirimi yok sayılır: reklam bitişi ya da eski oynatıcı
+              // durumu şarkıyı herkes için kesmesin. Süre (istemciler videoda 20 sn'yi geçince bildirir)
+              // biliniyorsa dolmuş olmalı; bilinmiyorsa (çok kısa video) en az 25 sn geçmiş olmalı.
+              if (cur.pausedAt != null) return;
               const elapsed = (now - cur.startedAt) / 1000;
-              if (elapsed < msg.duration - 5) return;
+              if (cur.duration ? elapsed < cur.duration - 5 : elapsed < 25) return;
+              playNext(member.room);
+            } else {
+              // Oynatılamama: bir kişideki sorun herkesin müziğini kesmesin.
+              // Ancak odadakilerin yarısından fazlası oynatamıyorsa geçilir.
+              if (!m.failedBy) m.failedBy = new Set();
+              m.failedBy.add(member.id);
+              const reason = youtubeErrorText(typeof msg.code === 'number' ? msg.code : null);
+              if (m.failedBy.size * 2 <= onlineCount(member.room)) {
+                send(ws, { t: 'music-error', message: `Bu video sende oynatılamıyor: ${reason}. Diğerlerinde çalmaya devam ediyor.` });
+                return;
+              }
+              playNext(member.room);
+              event = `⚠️ Oynatılamadı, geçildi: ${cur.title} (${reason})`;
             }
-            playNext(member.room);
-            if (msg.t === 'music-failed') event = `⚠️ Oynatılamadı, geçildi: ${cur.title}`;
           }
           broadcastMusic(member.room, event);
           return;
@@ -532,6 +612,8 @@ function createServer(options = {}) {
   function close() {
     return new Promise((resolve) => {
       for (const room of rooms.values()) for (const m of room.values()) clearTimeout(m.graceTimer);
+      for (const m of music.values()) clearTimeout(m.endTimer);
+      music.clear();
       rooms.clear();
       for (const ws of wss.clients) ws.terminate();
       wss.close();
@@ -540,7 +622,7 @@ function createServer(options = {}) {
     });
   }
 
-  return { server, wss, rooms, close };
+  return { server, wss, rooms, close, musicForTest: (room) => music.get(room) };
 }
 
 module.exports = { createServer, buildIceServers, normalizeRoom, cleanName, parseYouTubeId };

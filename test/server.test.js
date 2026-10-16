@@ -282,17 +282,27 @@ test('Müzik: sıra, çalma, duraklatma, geçme, bitiş ve hatalar', async () =>
     const r = await b.wait((m) => m.t === 'music' && m.current.pausedAt == null);
     assert.match(r.event, /devam/);
 
-    // Süresi dolmamış şarkı için "bitti" bildirimi yok sayılır (ör. 200 sn'lik şarkı 1 sn'de bitmez)
-    a.send({ t: 'music-ended', key: m1.current.key, duration: 200 });
+    // Süre bilinmezken erken gelen "bitti" bildirimi yok sayılır (ör. reklam bitişi şarkıyı kesmesin)
+    a.send({ t: 'music-ended', key: m1.current.key, duration: 15 });
+    // Süre bildirimi: en büyük değer geçerli, küçüğü yok sayılır
+    a.send({ t: 'music-duration', key: m1.current.key, duration: 200 });
+    const d1 = await b.wait((m) => m.t === 'music' && m.current && m.current.duration === 200);
+    assert.equal(d1.event, null);
+    b.send({ t: 'music-duration', key: m1.current.key, duration: 15 });
+    // Süresi dolmamış şarkı (200 sn) için bitiş yok sayılır
+    a.send({ t: 'music-ended', key: m1.current.key });
     a.send({ t: 'ping' });
     await a.wait((m) => m.t === 'pong');
     await new Promise((res) => setTimeout(res, 50));
     assert.ok(!b.msgs.some((m) => m.t === 'music' && m.current && m.current.title === 'Şarkı B'), 'erken bitiş kabul edilmemeli');
+    assert.ok(!b.msgs.some((m) => m.t === 'music' && m.current && m.current.duration === 15), 'kısa süre uzun olanı ezmemeli');
 
-    // Bitiş bildirimi: yanlış anahtar yok sayılır, doğru anahtar sıradakine geçer, tekrar bildirim etkisiz
+    // Yanlış anahtarla bitiş yok sayılır
     a.send({ t: 'music-ended', key: 'yanlis' });
+    // 200 sn geçmiş gibi yap: süre dolunca bitiş kabul edilir
+    srv.musicForTest('muzik').current.startedAt -= 200 * 1000;
     a.send({ t: 'music-ended', key: m1.current.key });
-    b.send({ t: 'music-ended', key: m1.current.key });
+    b.send({ t: 'music-ended', key: m1.current.key }); // ikinci bildirim etkisiz
     const next = await b.wait((m) => m.t === 'music' && m.current && m.current.title === 'Şarkı B');
     assert.equal(next.queue.length, 0);
     await new Promise((res) => setTimeout(res, 100));
@@ -305,10 +315,16 @@ test('Müzik: sıra, çalma, duraklatma, geçme, bitiş ve hatalar', async () =>
     const removed = await a.wait((m) => m.t === 'music' && m.queue.length === 0 && /çıkardı/.test(m.event || ''));
     assert.match(removed.event, /Şarkı C/);
 
-    // Oynatılamayan video geçilir
-    b.send({ t: 'music-failed', key: next.current.key });
+    // Oynatılamama: tek kişide sorun varsa sadece ona uyarı, şarkı herkes için devam eder
+    b.send({ t: 'music-failed', key: next.current.key, code: 150 });
+    const warn = await b.wait((m) => m.t === 'music-error');
+    assert.match(warn.message, /sende oynatılamıyor/);
+    assert.match(warn.message, /telif ya da yaş sınırı/);
+    assert.equal(srv.musicForTest('muzik').current.title, 'Şarkı B');
+    // Çoğunluk (2/2) oynatamıyorsa geçilir
+    a.send({ t: 'music-failed', key: next.current.key, code: 150 });
     const failed = await a.wait((m) => m.t === 'music' && m.current === null);
-    assert.match(failed.event, /Oynatılamadı/);
+    assert.match(failed.event, /Oynatılamadı, geçildi: Şarkı B \(YouTube bu videonun/);
 
     // Hatalı / engelli linkler
     a.send({ t: 'music-add', url: 'bu bir link değil' });
@@ -336,6 +352,40 @@ test('Müzik: sıra, çalma, duraklatma, geçme, bitiş ve hatalar', async () =>
     b.close();
     await new Promise((res) => setTimeout(res, 800));
     assert.equal(srv.rooms.size, 0);
+  } finally {
+    await srv.close();
+  }
+});
+
+test('Müzik: şarkının bitişini sunucu yönetir (istemci bildirimi gelmese de), duraklatma zamanlayıcıyı durdurur', async () => {
+  const srv = await start({ musicStartDelayMs: 0, musicEndGraceMs: 100, fetchVideoInfo: async (id) => ({ title: id }) });
+  try {
+    const a = await client(srv);
+    a.send({ t: 'join', room: 'zaman', id: ID_A, name: 'Ali' });
+    await a.wait((m) => m.t === 'welcome');
+    a.send({ t: 'music-add', url: 'aaaaaaaaaaa' });
+    const s1 = await a.wait((m) => m.t === 'music' && m.current);
+    a.send({ t: 'music-add', url: 'bbbbbbbbbbb' });
+    await a.wait((m) => m.t === 'music' && m.queue.length === 1);
+
+    // Süre bilinmeden sunucu kendiliğinden geçmez
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal(srv.musicForTest('zaman').current.id, 'aaaaaaaaaaa');
+
+    // Süre 1 sn bildirildi; duraklatılınca geçmemeli
+    a.send({ t: 'music-pause' });
+    await a.wait((m) => m.t === 'music' && m.current.pausedAt != null);
+    a.send({ t: 'music-duration', key: s1.current.key, duration: 1 });
+    await a.wait((m) => m.t === 'music' && m.current.duration === 1);
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal(srv.musicForTest('zaman').current.id, 'aaaaaaaaaaa', 'duraklatılmış şarkı geçilmemeli');
+
+    // Devam edince süre + pay dolunca sunucu kendisi sıradakine geçer
+    a.send({ t: 'music-resume' });
+    const s2 = await a.wait((m) => m.t === 'music' && m.current && m.current.id === 'bbbbbbbbbbb', 4000);
+    assert.equal(s2.event, null);
+    assert.equal(s2.current.duration, null, 'yeni şarkının süresi henüz bilinmiyor');
+    a.close();
   } finally {
     await srv.close();
   }

@@ -81,6 +81,7 @@
     ytCreating: null,
     ytKey: null,
     ytEndedSent: false,
+    ytReported: { key: null, d: 0 },
     ytStartTimer: null,
     analysisTrack: null,
     meterSrc: null,
@@ -1393,6 +1394,8 @@
       S.ytStartTimer = setTimeout(syncPlayer, -pos * 1000);
       return;
     }
+    reportDuration();
+    if (adLikely(cur)) return; // reklam sırasında konum düzeltmesi yapma
     if (st === YTS.ENDED) {
       // Güvenlik ağı: oynatıcı bitti ama sunucu hâlâ bu şarkıda (bildirim kaybolduysa
       // ya da erken sayıldıysa) — her eşitlemede (5 sn) tekrar bildir.
@@ -1415,23 +1418,70 @@
     }
   }
 
+  /** Oynatıcıdaki video gerçekten çalınan şarkı mı (geçiş anlarında eski video olabilir) */
+  function playerOnCurrent(cur) {
+    try {
+      const vid = S.yt.getVideoData().video_id;
+      return !vid || vid === cur.id;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Reklam oynuyor olabilir mi? Gömülü oynatıcı reklamı ayrıca bildirmez; reklam sırasında
+   * getDuration() reklamın süresini döndürür. Sunucunun bildiği (en büyük) süreden belirgin
+   * şekilde kısaysa reklam varsayılır.
+   */
+  function adLikely(cur) {
+    if (!S.yt || !cur.duration) return false;
+    let d = 0;
+    try {
+      d = S.yt.getDuration();
+    } catch {}
+    return d > 0 && d < cur.duration - 3;
+  }
+
+  /**
+   * Gerçek video süresini sunucuya bildir (sunucu şarkının bitişini buna göre yönetir).
+   * Reklam sırasında oynatıcı reklamın süresini verebildiği için, ancak videoda 20 sn'yi
+   * geçtikten sonra bildirilir (reklamlar genelde daha kısadır).
+   */
+  function reportDuration() {
+    const cur = S.music.current;
+    if (!cur || !S.yt || S.ytKey !== cur.key || !playerOnCurrent(cur)) return;
+    let d = 0;
+    let t = 0;
+    try {
+      d = S.yt.getDuration();
+      t = S.yt.getCurrentTime();
+    } catch {}
+    if (t < 20) return;
+    if (!(d > 0) || (S.ytReported.key === cur.key && d <= S.ytReported.d + 0.5)) return;
+    if (cur.duration && d <= cur.duration + 0.5) return;
+    S.ytReported = { key: cur.key, d };
+    wsSend({ t: 'music-duration', key: cur.key, duration: d });
+  }
+
   function onYtState(e) {
     const cur = S.music.current;
     if (!cur || S.ytKey !== cur.key) return;
-    if (e.data === window.YT.PlayerState.ENDED && !S.ytEndedSent) {
-      S.ytEndedSent = true;
+    const YTS = window.YT.PlayerState;
+    if (e.data === YTS.PLAYING) reportDuration();
+    if (e.data === YTS.ENDED && !S.ytEndedSent) {
       let duration = null;
-      let videoId = null;
       try {
         duration = S.yt.getDuration();
-        videoId = S.yt.getVideoData().video_id;
       } catch {}
-      console.info('müzik bitti bildirimi', JSON.stringify({ key: cur.key, id: cur.id, videoId, duration, pos: musicPos(cur) }));
-      // Oynatıcı başka bir videonun bitişini bildiriyorsa (geçiş anı) yok say
-      if (videoId && videoId !== cur.id) {
-        S.ytEndedSent = false;
+      const pos = musicPos(cur);
+      // Reklam bitişi, eski videonun bitişi ya da süresi dolmamış şarkı: bildirme.
+      // (Sunucu şarkıyı süresi dolunca zaten kendisi geçer.)
+      if (!playerOnCurrent(cur) || adLikely(cur) || (cur.duration && pos < cur.duration - 5)) {
+        console.info('müzik: erken/şüpheli bitiş yok sayıldı', JSON.stringify({ id: cur.id, duration, known: cur.duration, pos }));
         return;
       }
+      S.ytEndedSent = true;
+      console.info('müzik bitti bildirimi', JSON.stringify({ key: cur.key, id: cur.id, duration, known: cur.duration, pos }));
       wsSend({ t: 'music-ended', key: cur.key, duration });
     }
   }
@@ -1440,14 +1490,12 @@
     console.warn('YouTube oynatıcı hatası', e.data);
     const cur = S.music.current;
     if (!cur || S.ytKey !== cur.key) return;
-    // 2: geçersiz kimlik, 100: video yok/özel, 101/150: başka sitelerde oynatma kapalı
-    if ([2, 100, 101, 150].includes(e.data)) {
-      if (!S.ytEndedSent) {
-        S.ytEndedSent = true;
-        wsSend({ t: 'music-failed', key: cur.key });
-      }
-    } else {
-      toast('Müzik oynatılamadı (YouTube hata ' + e.data + ').', 3500);
+    // 2: geçersiz kimlik, 5: tarayıcı oynatamadı, 100: video yok/özel,
+    // 101/150/152: sahibi başka sitelerde oynatmayı kapatmış ya da yaş sınırlı.
+    // Sunucuya bildirilir; şarkı sadece odadakilerin çoğunda oynatılamıyorsa geçilir.
+    if (!S.ytEndedSent) {
+      S.ytEndedSent = true;
+      wsSend({ t: 'music-failed', key: cur.key, code: e.data });
     }
   }
 

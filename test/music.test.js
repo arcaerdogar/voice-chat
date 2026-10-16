@@ -107,6 +107,24 @@ test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yans
     assert.ok(Math.abs(s.time - s.expected) < 2.5, `senkron dışı: çalınan ${s.time.toFixed(1)} sn, beklenen ${s.expected.toFixed(1)} sn`);
   }
 
+  // Reklam bitişi gibi erken bir "bitti" bildirimi ve tek kişide oynatılamama şarkıyı herkes için kesmemeli
+  await A.evaluate(() => {
+    const S = window.__rv;
+    S.ws.send(JSON.stringify({ t: 'music-ended', key: S.music.current.key, duration: 15 }));
+  });
+  await B.evaluate(() => {
+    const S = window.__rv;
+    S.ws.send(JSON.stringify({ t: 'music-failed', key: S.music.current.key, code: 150 }));
+  });
+  await B.waitForSelector('#toast:not([hidden])');
+  assert.match(await B.textContent('#toast'), /sende oynatılamıyor/);
+  await new Promise((r) => setTimeout(r, 1500));
+  for (const p of pages) {
+    const s = await state(p);
+    assert.equal(s.id, LONG, 'şarkı kesilmemeliydi');
+    assert.equal(s.ytState, PLAYING);
+  }
+
   // Kulaklık kapatma müziği de susturur; müzik sesi kişiseldir
   await B.click('#deafen-btn');
   await until(B, (s) => s.muted === true, 5000, 'sağırlaştırınca müzik susması');
