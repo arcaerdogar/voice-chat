@@ -75,7 +75,7 @@
     procDest: null,
     rnnoiseReady: null,
     clockOffset: 0, // sunucu saati - yerel saat (ms)
-    music: { queue: [], current: null },
+    music: { queue: [], current: null, history: [], loop: 'off', search: false },
     musicVol: store.get('musicVol', 35),
     yt: null,
     ytCreating: null,
@@ -509,7 +509,11 @@
     applyTransmit();
     const pct = Math.max(0, Math.min(100, ((db + 80) / 80) * 100));
     const fill = $('#meter-fill');
-    if (fill && $('#settings-dialog').open) fill.style.width = pct + '%';
+    if (fill && $('#settings-dialog').open) {
+      fill.style.width = pct + '%';
+      const lv = $('#meter-val');
+      if (lv) lv.textContent = db <= -99 ? '—' : Math.round(db) + ' dB';
+    }
     setSpeaking(S.selfEl, S.transmitting && db > SPEAK_DB);
   }
 
@@ -841,9 +845,19 @@
       S.peers.set(p.id, p);
       p.el = makeCard(p.name, false);
       const vol = p.el.querySelector('.vol');
+      const volVal = p.el.querySelector('.vol-val');
       vol.value = p.volume;
+      volVal.textContent = p.volume + '%';
+      volVal.classList.toggle('boost', p.volume > 100);
+      vol.ondblclick = () => {
+        // çift tık: %100'e döndür
+        vol.value = 100;
+        vol.oninput();
+      };
       vol.oninput = () => {
         p.volume = Number(vol.value);
+        volVal.textContent = p.volume + '%';
+        volVal.classList.toggle('boost', p.volume > 100);
         store.set('vol:' + p.name, p.volume);
         applyPeerAudio(p);
       };
@@ -877,6 +891,13 @@
       try {
         p.src.disconnect();
       } catch {}
+    }
+    if (p.boostGain) {
+      try {
+        p.boostGain.disconnect();
+        p.boostLimiter.disconnect();
+      } catch {}
+      p.boostGain = null;
     }
     if (p.el) p.el.remove();
     S.peers.delete(p.id);
@@ -1062,16 +1083,59 @@
           p.analyser.fftSize = 512;
         }
         p.src.connect(p.analyser);
+        if (p.boostGain) p.src.connect(p.boostGain);
       } catch (err) {
         console.warn('analyser', err);
       }
     }
+    applyPeerAudio(p);
   }
 
+  /**
+   * %100'ün üstü için güçlendirme zinciri: kaynak → kazanç → sınırlayıcı → hoparlör.
+   * Sınırlayıcı, yükseltilen sesin patlamasını (clipping) engeller.
+   */
+  function ensureBoost(p) {
+    if (p.boostGain || !S.ctx || !p.src) return !!p.boostGain;
+    try {
+      p.boostGain = S.ctx.createGain();
+      p.boostGain.gain.value = 0;
+      const limiter = S.ctx.createDynamicsCompressor();
+      limiter.threshold.value = -3;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.002;
+      limiter.release.value = 0.15;
+      p.boostGain.connect(limiter).connect(S.ctx.destination);
+      p.boostLimiter = limiter;
+      p.src.connect(p.boostGain);
+      return true;
+    } catch (err) {
+      console.warn('boost', err);
+      p.boostGain = null;
+      return false;
+    }
+  }
+
+  /**
+   * Kişi ses seviyesi (0-200%). %100'e kadar ses doğrudan <audio> öğesinden çalar (tarayıcının
+   * yankı engellemesiyle en uyumlu yol). %100'ün üstünde ses Web Audio güçlendiricisinden çalar;
+   * <audio> öğesi sessize alınır ama bağlı kalır (Chrome uzak sesi ancak böyle akıtıyor).
+   */
   function applyPeerAudio(p) {
     if (!p.audio) return;
-    p.audio.volume = Math.max(0, Math.min(1, p.volume / 100));
-    p.audio.muted = S.deafened || p.localMuted;
+    const silent = S.deafened || p.localMuted;
+    const v = Math.max(0, Math.min(2, p.volume / 100));
+    const boosted = v > 1 && ensureBoost(p);
+    if (boosted) {
+      p.audio.muted = true;
+      p.boostGain.gain.setTargetAtTime(silent ? 0 : v, S.ctx.currentTime, 0.02);
+    } else {
+      if (p.boostGain) p.boostGain.gain.setTargetAtTime(0, S.ctx.currentTime, 0.02);
+      p.audio.volume = Math.min(1, v);
+      p.audio.muted = silent;
+    }
+    p.boosted = boosted;
   }
 
   function showAudioUnlock() {
@@ -1225,19 +1289,64 @@
 
   function onMusic(m) {
     if (typeof m.serverNow === 'number') S.clockOffset = m.serverNow - Date.now();
-    S.music = { queue: Array.isArray(m.queue) ? m.queue : [], current: m.current || null };
+    S.music = {
+      queue: Array.isArray(m.queue) ? m.queue : [],
+      current: m.current || null,
+      history: Array.isArray(m.history) ? m.history : [],
+      loop: m.loop || 'off',
+      search: !!m.search,
+    };
     if (m.event) chatAppend('', m.event, 0, true);
     renderMusic();
     syncPlayer();
   }
 
+  function fmtDur(sec) {
+    if (!sec) return '';
+    sec = Math.round(sec);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const ss = String(sec % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+  }
+
+  const LOOP_INFO = {
+    off: { icon: '🔁', title: 'Tekrar: kapalı (tıkla: liste tekrarı)', next: 'all' },
+    all: { icon: '🔁', title: 'Tekrar: liste (tıkla: tek şarkı)', next: 'one' },
+    one: { icon: '🔂', title: 'Tekrar: tek şarkı (tıkla: kapalı)', next: 'off' },
+  };
+
+  /** Sıra/geçmiş satırı */
+  function songRow(item, buttonText, buttonTitle, onClick) {
+    const li = document.createElement('li');
+    const t = document.createElement('span');
+    t.className = 'q-title';
+    t.textContent = item.title;
+    const meta = document.createElement('span');
+    meta.className = 'q-by';
+    meta.textContent = [fmtDur(item.duration), item.by].filter(Boolean).join(' · ');
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny ghost';
+    btn.textContent = buttonText;
+    btn.title = buttonTitle;
+    btn.onclick = onClick;
+    li.append(t, meta, btn);
+    return li;
+  }
+
   function renderMusic() {
     const cur = S.music.current;
+    const loop = LOOP_INFO[S.music.loop] || LOOP_INFO.off;
+    const lb = $('#m-loop');
+    lb.textContent = loop.icon;
+    lb.title = loop.title;
+    lb.classList.toggle('on', S.music.loop !== 'off');
+    $('#music-input').placeholder = S.music.search ? 'YouTube linki ya da şarkı adı' : 'YouTube linki yapıştır';
     $('#now-playing').hidden = !cur;
     $('#music-empty').hidden = !!cur;
     if (cur) {
       $('#np-title').textContent = cur.title;
-      $('#np-sub').textContent = (cur.author ? cur.author + ' · ' : '') + 'ekleyen: ' + cur.by;
+      $('#np-sub').textContent = [cur.author, fmtDur(cur.duration), 'ekleyen: ' + cur.by].filter(Boolean).join(' · ');
       $('#m-pause').textContent = cur.pausedAt != null ? '▶️' : '⏸️';
       $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
     }
@@ -1249,22 +1358,17 @@
     const list = $('#music-queue');
     list.innerHTML = '';
     for (const item of S.music.queue) {
-      const li = document.createElement('li');
-      const t = document.createElement('span');
-      t.className = 'q-title';
-      t.textContent = item.title;
-      const by = document.createElement('span');
-      by.className = 'q-by';
-      by.textContent = item.by;
-      const rm = document.createElement('button');
-      rm.className = 'btn tiny ghost';
-      rm.textContent = '✕';
-      rm.title = 'Sıradan çıkar';
-      rm.onclick = () => wsSend({ t: 'music-remove', key: item.key });
-      li.append(t, by, rm);
-      list.appendChild(li);
+      list.appendChild(songRow(item, '✕', 'Sıradan çıkar', () => wsSend({ t: 'music-remove', key: item.key })));
     }
     $('#queue-head').hidden = S.music.queue.length === 0;
+
+    const hist = $('#music-history');
+    hist.innerHTML = '';
+    for (const item of S.music.history.slice(0, 10)) {
+      hist.appendChild(songRow(item, '↺', 'Tekrar sıraya ekle', () => wsSend({ t: 'music-requeue', key: item.key })));
+    }
+    $('#history-wrap').hidden = S.music.history.length === 0;
+    $('#m-prev').disabled = !cur && S.music.history.length === 0;
   }
 
   let ytApi = null;
@@ -1467,7 +1571,16 @@
     const cur = S.music.current;
     if (!cur || S.ytKey !== cur.key) return;
     const YTS = window.YT.PlayerState;
-    if (e.data === YTS.PLAYING) reportDuration();
+    if (e.data === YTS.PLAYING) {
+      reportDuration();
+      // Çalmaya başlar başlamaz herkesle aynı yere getir (yükleme süresi kadar geride kalmasın)
+      if (!adLikely(cur) && cur.pausedAt == null) {
+        try {
+          const pos = musicPos(cur);
+          if (pos > 0 && Math.abs(S.yt.getCurrentTime() - pos) > 1.5) S.yt.seekTo(pos, true);
+        } catch {}
+      }
+    }
     if (e.data === YTS.ENDED && !S.ytEndedSent) {
       let duration = null;
       try {
@@ -1501,6 +1614,7 @@
 
   function applyMusicVolume() {
     $('#m-vol').value = S.musicVol;
+    $('#m-vol-val').textContent = S.musicVol + '%';
     if (!S.yt || !S.yt.setVolume) return;
     try {
       S.yt.setVolume(S.musicVol);
@@ -1527,6 +1641,7 @@
       toast('Sunucuya bağlı değil.');
       return false;
     }
+    if (S.music.search && !/youtu.?be|^[A-Za-z0-9_-]{11}$/i.test(url)) toast('🔎 Aranıyor: ' + url, 2500);
     return true;
   }
 
@@ -1554,8 +1669,19 @@
       case 'resume':
         wsSend({ t: 'music-resume' });
         return true;
+      case 'prev':
+      case 'önceki':
+        wsSend({ t: 'music-prev' });
+        return true;
+      case 'loop':
+      case 'tekrar': {
+        const arg = (rest[0] || '').toLowerCase();
+        const mode = { off: 'off', kapalı: 'off', all: 'all', liste: 'all', one: 'one', tek: 'one' }[arg] || (LOOP_INFO[S.music.loop] || LOOP_INFO.off).next;
+        wsSend({ t: 'music-loop', mode });
+        return true;
+      }
       default:
-        toast('Komutlar: /play <youtube linki>, /skip, /stop, /pause, /resume', 4000);
+        toast('Komutlar: /play <link ya da şarkı adı>, /skip, /prev, /stop, /pause, /resume, /loop [kapalı|liste|tek]', 5000);
         return true;
     }
   }
@@ -1766,7 +1892,7 @@
       } catch {}
     }
     S.stream = S.track = S.analysisTrack = S.meterSrc = S.rawStream = S.rawTrack = S.procSrc = null;
-    S.music = { queue: [], current: null };
+    S.music = { queue: [], current: null, history: [], loop: 'off', search: false };
     destroyPlayer();
     renderMusic();
     if (S.selfEl) S.selfEl.remove();
@@ -1873,6 +1999,8 @@
       if (cur) wsSend({ t: cur.pausedAt != null ? 'music-resume' : 'music-pause' });
     };
     $('#m-skip').onclick = () => wsSend({ t: 'music-skip' });
+    $('#m-prev').onclick = () => wsSend({ t: 'music-prev' });
+    $('#m-loop').onclick = () => wsSend({ t: 'music-loop', mode: (LOOP_INFO[S.music.loop] || LOOP_INFO.off).next });
     $('#m-stop').onclick = () => wsSend({ t: 'music-stop' });
     $('#m-vol').oninput = (e) => {
       S.musicVol = Number(e.target.value);

@@ -3,7 +3,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY server.js ./
+COPY server.js youtube.js ./
 COPY public ./public
 USER node
 ENV PORT=3000

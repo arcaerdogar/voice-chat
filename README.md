@@ -21,7 +21,8 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
 - Opus ses, yankı engelleme, otomatik kazanç (ayarlardan kapatılabilir)
 - **Yapay zekâ gürültü engelleme (RNNoise)**: hoparlörden mikrofona giren oyun efektleri, klavye, fan sesi silinir; konuşma korunur
 - **Otomatik ses eşiği**: konuşmadığın anlarda mikrofon tamamen susar (RNNoise'un konuşma algılamasıyla). Sekme arka plandayken de çalışır (AudioWorklet)
-- **Müzik botu**: YouTube linki ekle, odadaki herkeste aynı anda çalar. Ortak sıra, duraklat/geç/durdur, kişisel müzik sesi, sohbette `/play`, `/skip`, `/stop`, `/pause`, `/resume`
+- **Müzik botu**: YouTube linki ya da (API anahtarıyla) şarkı adı ekle, odadaki herkeste aynı anda çalar. Ortak sıra, önceki şarkı, liste/tek şarkı tekrarı, son çalınanlar, duraklat/geç/durdur, kişisel müzik sesi; sohbette `/play`, `/skip`, `/prev`, `/loop`, `/stop`, `/pause`, `/resume`
+- **Kişi sesi %0–200**: sessiz konuşan arkadaşını iki katına kadar yükselt (sınırlayıcıyla, patlamadan). Tüm ses kaydırıcıları yüzde olarak gösterilir
 - Açık mikrofon veya bas-konuş (klavye tuşu ya da farenin yan tuşları)
 - Kişi bazlı ses seviyesi ve yerel susturma
 - Konuşan kişinin kartı yeşil parlar, her kişinin gecikmesi (ms) ve bağlantının röle (TURN) üzerinden olup olmadığı görünür
@@ -61,8 +62,12 @@ Ses sunucudan yayınlanmaz. Sunucu sadece ortak sırayı ve "şu şarkı şu san
 herkesin tarayıcısı resmi YouTube oynatıcısıyla aynı videoyu aynı konumda çalar (±2 sn içinde senkron).
 Böylece sunucuya yük binmez, müzik mikrofondan gönderilmez ve herkes müzik sesini kendisi ayarlar.
 
-- Sadece YouTube linkleri desteklenir (`youtube.com/watch`, `youtu.be`, `music.youtube.com`, `shorts`).
-- Sahibi "başka sitelerde oynatma"yı kapatmış videolar eklenirken reddedilir; oynatılamayan video otomatik geçilir.
+- YouTube linkleri desteklenir (`youtube.com/watch`, `youtu.be`, `music.youtube.com`, `shorts`). Sunucuda `YOUTUBE_API_KEY` varsa şarkı adıyla da eklenebilir.
+- **Telifli / çalınamayan videolar:** Bazı videolar (çoğunlukla plak şirketlerinin resmi klipleri) YouTube dışında oynatılamaz, yaş sınırlı ya da Türkiye'de engelli olabilir.
+  API anahtarı varsa uygulama bunu eklerken (ya da çalarken) fark eder ve aynı şarkının çalınabilen bir versiyonunu (Topic kanalı, lyrics, audio) otomatik bulup onu çalar.
+  Ses hiçbir zaman YouTube'dan indirilip yeniden yayınlanmaz; her zaman YouTube'un resmi oynatıcısı kullanılır.
+- Bir video sadece bir kişide oynatılamıyorsa diğerlerinde çalmaya devam eder; ancak çoğunlukta oynatılamazsa alternatife geçilir ya da atlanır.
+- Şarkının bitişini sunucu yönetir; reklam bitişi gibi hatalı "bitti" sinyalleri şarkıyı kesmez.
 - Kulaklık (sağırlaştırma) müziği de susturur. YouTube'u engelleyen reklam engelleyiciler oynatıcıyı durdurabilir.
 - Sunucu yeniden başlarsa sıra sıfırlanır (sesli sohbet etkilenmez).
 

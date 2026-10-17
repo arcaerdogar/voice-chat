@@ -184,6 +184,75 @@ test('uçtan uca: ses, susturma, yeniden bağlanma ve dayanıklılık', { timeou
     await A.waitForFunction(() => window.__rv.track.enabled === true);
   });
 
+  await t.test('kişi sesi %200 e kadar yükseltilir, sayısal gösterge güncellenir', async () => {
+    const setVol = (v) =>
+      B.evaluate((v) => {
+        const r = document.querySelector('.participant:not(:first-child) .vol');
+        r.value = String(v);
+        r.dispatchEvent(new Event('input'));
+      }, v);
+    const peerState = () =>
+      B.evaluate(() => {
+        const p = [...window.__rv.peers.values()][0];
+        return {
+          boosted: p.boosted,
+          gain: p.boostGain ? p.boostGain.gain.value : null,
+          audioMuted: p.audio.muted,
+          audioVolume: p.audio.volume,
+          label: p.el.querySelector('.vol-val').textContent,
+          labelBoost: p.el.querySelector('.vol-val').classList.contains('boost'),
+        };
+      });
+
+    await setVol(200);
+    await new Promise((r) => setTimeout(r, 300));
+    let s = await peerState();
+    assert.equal(s.label, '200%');
+    assert.equal(s.labelBoost, true);
+    assert.equal(s.boosted, true);
+    assert.ok(Math.abs(s.gain - 2) < 0.05, 'kazanç 2 olmalı: ' + s.gain);
+    assert.equal(s.audioMuted, true, '%100 üstünde ses güçlendiriciden çalmalı');
+
+    // Ses güçlendirme zincirinden gerçekten geçiyor mu (sınırlayıcının çıkışını ölç)
+    const db = await B.evaluate(async () => {
+      const S = window.__rv;
+      const p = [...S.peers.values()][0];
+      const an = S.ctx.createAnalyser();
+      an.fftSize = 2048;
+      p.boostLimiter.connect(an);
+      const buf = new Float32Array(an.fftSize);
+      let max = -200;
+      for (let i = 0; i < 30; i++) {
+        an.getFloatTimeDomainData(buf);
+        let sum = 0;
+        for (const x of buf) sum += x * x;
+        max = Math.max(max, 10 * Math.log10(sum / buf.length + 1e-12));
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      p.boostLimiter.disconnect(an);
+      return max;
+    });
+    assert.ok(db > -60, 'güçlendirilmiş ses duyulmalı: ' + db.toFixed(1) + ' dB');
+
+    // Kulaklık kapatma güçlendirilmiş sesi de susturur
+    await B.click('#deafen-btn');
+    await new Promise((r) => setTimeout(r, 300));
+    assert.ok((await peerState()).gain < 0.01);
+    await B.click('#deafen-btn');
+
+    // %50: normal yol, güçlendirici sessiz
+    await setVol(50);
+    await new Promise((r) => setTimeout(r, 300));
+    s = await peerState();
+    assert.equal(s.label, '50%');
+    assert.equal(s.labelBoost, false);
+    assert.equal(s.boosted, false);
+    assert.equal(s.audioMuted, false);
+    assert.equal(s.audioVolume, 0.5);
+    assert.ok(s.gain < 0.01);
+    await setVol(100);
+  });
+
   await t.test('sohbet mesajı iletilir', async () => {
     await A.fill('#chat-input', 'drake 30 sn');
     await A.press('#chat-input', 'Enter');

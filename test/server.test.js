@@ -37,7 +37,7 @@ function client(srv) {
         return Promise.resolve(found);
       }
       return new Promise((res, rej) => {
-        const timer = setTimeout(() => rej(new Error('timeout waiting for message')), ms);
+        const timer = setTimeout(() => rej(new Error('mesaj beklenirken zaman aşımı: ' + pred.toString().slice(0, 160))), ms);
         c.waiters.push({
           pred,
           resolve: (m) => {
@@ -333,8 +333,9 @@ test('Müzik: sıra, çalma, duraklatma, geçme, bitiş ve hatalar', async () =>
     assert.match((await a.wait((m) => m.t === 'music-error')).message, /kapalı/);
 
     // Geç + durdur
+    // (geçersiz girişler de hız sınırına sayılır; Ali'nin hakkı dolmasın diye ikincisini Berk ekler)
     a.send({ t: 'music-add', url: 'aaaaaaaaaaa' });
-    a.send({ t: 'music-add', url: 'bbbbbbbbbbb' });
+    b.send({ t: 'music-add', url: 'bbbbbbbbbbb' });
     await b.wait((m) => m.t === 'music' && m.queue.length === 1);
     b.send({ t: 'music-skip' });
     const skipped = await a.wait((m) => m.t === 'music' && /geçti/.test(m.event || ''));
@@ -385,6 +386,114 @@ test('Müzik: şarkının bitişini sunucu yönetir (istemci bildirimi gelmese d
     const s2 = await a.wait((m) => m.t === 'music' && m.current && m.current.id === 'bbbbbbbbbbb', 4000);
     assert.equal(s2.event, null);
     assert.equal(s2.current.duration, null, 'yeni şarkının süresi henüz bilinmiyor');
+    a.close();
+  } finally {
+    await srv.close();
+  }
+});
+
+test('Müzik: önceki şarkı, liste tekrarı, tek şarkı tekrarı ve geçmiş', async () => {
+  const srv = await start({ musicStartDelayMs: 0, fetchVideoInfo: async (id) => ({ title: id.slice(0, 1).toUpperCase() }) });
+  try {
+    const a = await client(srv);
+    a.send({ t: 'join', room: 'liste', id: ID_A, name: 'Ali' });
+    const w = await a.wait((m) => m.t === 'welcome');
+    assert.equal(w.music.loop, 'off');
+    assert.deepEqual(w.music.history, []);
+    assert.equal(w.music.search, false);
+
+    for (const id of ['aaaaaaaaaaa', 'bbbbbbbbbbb', 'ccccccccccc']) {
+      a.send({ t: 'music-add', url: id });
+      await a.wait((m) => m.t === 'music' && /ekledi|çalıyor/.test(m.event || ''));
+    }
+    const M = () => srv.musicForTest('liste');
+    const titles = () => ({ cur: M().current && M().current.title, queue: M().queue.map((q) => q.title).join(''), hist: M().history.map((q) => q.title).join('') });
+    const finish = async () => {
+      // Şarkının süresi dolmuş gibi yapıp bitir
+      M().current.startedAt -= 60 * 1000;
+      a.send({ t: 'music-ended', key: M().current.key });
+      await a.wait((m) => m.t === 'music');
+    };
+    assert.deepEqual(titles(), { cur: 'A', queue: 'BC', hist: '' });
+
+    await finish();
+    assert.deepEqual(titles(), { cur: 'B', queue: 'C', hist: 'A' });
+
+    // Önceki: B sıranın başına döner, A çalar
+    a.send({ t: 'music-prev' });
+    const prev = await a.wait((m) => m.t === 'music' && /önceki/.test(m.event || ''));
+    assert.match(prev.event, /A$/);
+    assert.deepEqual(titles(), { cur: 'A', queue: 'BC', hist: '' });
+    // Geçmiş boşken "önceki" çalanı baştan başlatır (yeni çalma kimliği)
+    const keyBefore = M().current.key;
+    a.send({ t: 'music-prev' });
+    await a.wait((m) => m.t === 'music');
+    assert.equal(M().current.title, 'A');
+    assert.notEqual(M().current.key, keyBefore);
+
+    // Tek şarkı tekrarı: bitince aynı şarkı baştan (geçmişe eklenmez); "geç" yine sıradakine geçer
+    a.send({ t: 'music-loop', mode: 'one' });
+    assert.match((await a.wait((m) => m.t === 'music' && m.loop === 'one')).event, /tek şarkı/);
+    const k1 = M().current.key;
+    await finish();
+    assert.deepEqual(titles(), { cur: 'A', queue: 'BC', hist: '' });
+    assert.notEqual(M().current.key, k1, 'tekrar çalarken yeni çalma kimliği almalı');
+    a.send({ t: 'music-skip' });
+    await a.wait((m) => m.t === 'music' && /geçti/.test(m.event || ''));
+    assert.deepEqual(titles(), { cur: 'B', queue: 'C', hist: 'A' });
+
+    // Liste tekrarı: biten şarkı sıranın sonuna eklenir
+    a.send({ t: 'music-loop', mode: 'all' });
+    await a.wait((m) => m.t === 'music' && m.loop === 'all');
+    await finish();
+    assert.deepEqual(titles(), { cur: 'C', queue: 'B', hist: 'BA' });
+    await finish();
+    assert.deepEqual(titles(), { cur: 'B', queue: 'C', hist: 'CBA' });
+    // Liste tekrarında "önceki": sıranın sonuna eklenmiş kopya çift olmasın
+    a.send({ t: 'music-prev' });
+    await a.wait((m) => m.t === 'music' && /önceki/.test(m.event || ''));
+    assert.deepEqual(titles(), { cur: 'C', queue: 'B', hist: 'BA' });
+
+    // Geçmişten tekrar sıraya ekleme
+    a.send({ t: 'music-requeue', key: M().history[1].key });
+    await a.wait((m) => m.t === 'music' && /tekrar sıraya/.test(m.event || ''));
+    assert.deepEqual(titles(), { cur: 'C', queue: 'BA', hist: 'BA' });
+
+    // Geçersiz tekrar modu yok sayılır; durdurunca çalan şarkı geçmişe girer
+    a.send({ t: 'music-loop', mode: 'saçma' });
+    a.send({ t: 'music-stop' });
+    await a.wait((m) => m.t === 'music' && /durdurdu/.test(m.event || ''));
+    assert.equal(M().loop, 'all');
+    assert.deepEqual(titles(), { cur: null, queue: '', hist: 'CBA' });
+    a.close();
+  } finally {
+    await srv.close();
+  }
+});
+
+test('Müzik: çalarken çoğunlukta oynatılamayan şarkının yerine çalınabilen versiyonu çalınır', async () => {
+  const youtube = {
+    searchEnabled: true,
+    resolve: async (input) => ({ item: { id: 'ORIGINAL123', title: 'Şarkı (Official Video)', author: 'Sanatçı', duration: 200 } }),
+    alternativeFor: async (item) => (item.id === 'ORIGINAL123' ? { id: 'TOPICalt123', title: 'Şarkı', author: 'Sanatçı - Topic', duration: 201 } : null),
+  };
+  const srv = await start({ musicStartDelayMs: 0, youtube });
+  try {
+    const a = await client(srv);
+    a.send({ t: 'join', room: 'alt', id: ID_A, name: 'Ali' });
+    const w = await a.wait((m) => m.t === 'welcome');
+    assert.equal(w.music.search, true);
+    a.send({ t: 'music-add', url: 'şarkı adı' });
+    const s1 = await a.wait((m) => m.t === 'music' && m.current);
+    assert.equal(s1.current.duration, 200, 'API süresi baştan bilinmeli');
+    a.send({ t: 'music-failed', key: s1.current.key, code: 150 });
+    const s2 = await a.wait((m) => m.t === 'music' && m.current && m.current.id === 'TOPICalt123');
+    assert.match(s2.event, /çalınamadı .*yerine çalınabilen versiyonu: Şarkı/);
+    assert.notEqual(s2.current.key, s1.current.key);
+    // Alternatif de çalınamazsa geçilir
+    a.send({ t: 'music-failed', key: s2.current.key, code: 150 });
+    const s3 = await a.wait((m) => m.t === 'music' && m.current === null);
+    assert.match(s3.event, /Oynatılamadı, geçildi/);
     a.close();
   } finally {
     await srv.close();

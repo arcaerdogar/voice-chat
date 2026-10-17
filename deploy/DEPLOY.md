@@ -88,6 +88,24 @@ Not: Müzik botu, eklenen videonun başlığını almak için sunucudan `https:/
 istek atar. Sunucunun dışarıya HTTPS çıkışı kapalıysa müzik yine çalışır, sadece başlık yerine
 "YouTube videosu (kimlik)" yazar.
 
+## Müzik: YouTube API anahtarı (isteğe bağlı, önerilir)
+
+Anahtarla: şarkı adıyla arama ve telif/yaş sınırı yüzünden çalınamayan videolar için otomatik olarak
+çalınabilen versiyonu bulma açılır. Anahtarsız da müzik botu linklerle çalışır. Ücretsizdir.
+
+1. https://console.cloud.google.com adresine Google hesabınla gir, üstten **yeni proje** oluştur (ör. `riftvoice`).
+2. **APIs & Services → Library** → "YouTube Data API v3" → **Enable**.
+3. **APIs & Services → Credentials → Create credentials → API key**. Oluşan anahtarı kopyala.
+4. (Önerilir) Anahtara tıkla → **API restrictions → Restrict key → YouTube Data API v3** → Kaydet.
+5. Sunucuda:
+```bash
+cd /opt/voice-chat
+echo "YOUTUBE_API_KEY=BURAYA_ANAHTAR" | sudo tee -a .env > /dev/null
+sudo docker compose up -d
+```
+Ücretsiz kota günde 10.000 birimdir; bir arama ~100 birim (günde ~100 arama), link ekleme ~1 birim.
+Aynı arama 6 saat önbellekte tutulur. Kota dolarsa uygulama bunu söyler ve linklerle çalışmaya devam eder.
+
 ## Domain geri geldiğinde
 1. `/etc/nginx/conf.d/riftvoice.conf` içinde iki `server_name` satırını domain ile değiştir (ör. `voice.ituacm.com`).
 2. Sertifika satırlarını gerçek sertifikayla değiştir (Cloudflare Origin / Let's Encrypt).

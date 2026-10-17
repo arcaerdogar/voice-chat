@@ -9,6 +9,9 @@ services:
       - PORT=3000
       - TURN_URLS=turn:212.64.215.98:3478?transport=udp,turn:212.64.215.98:3478?transport=tcp
       - TURN_SECRET=${TURN_SECRET:?.env dosyasinda TURN_SECRET ayarlanmali}
+      # İsteğe bağlı: şarkı adıyla arama ve çalınamayan videolara otomatik alternatif
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
+      - MUSIC_REGION=${MUSIC_REGION:-TR}
     # Sadece sunucunun içinden erişilir; dışarıya nginx açar.
     ports:
       - "127.0.0.1:4010:3000"

@@ -161,8 +161,25 @@ test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yans
   await until(A, (s) => s.queue === 1, 10000, 'sıraya ekleme');
   for (const p of pages) await until(p, (s) => s.id === LONG && s.ytState === PLAYING, 60000, 'bitince sıradakine geçiş');
 
-  // Geç: sıra boş olduğu için müzik durur
-  await A.click('#m-skip');
+  // Geçmiş listesi ve önceki şarkı: herkes bir önceki şarkıya (kısa video) döner
+  await until(B, () => true, 1000);
+  assert.ok((await B.locator('#music-history li').count()) >= 1, 'son çalınanlar listesi görünmeli');
+  await A.click('#m-prev');
+  for (const p of pages) await until(p, (s) => s.id === SHORT && s.ytState === PLAYING, 15000, 'önceki şarkı');
+  assert.match(await B.textContent('#chat-log'), /Ahri önceki şarkıya döndü/);
+
+  // Tekrar modu herkese yansır (kapalı → liste → tek şarkı)
+  await A.click('#m-loop');
+  await B.waitForFunction(() => window.__rv.music.loop === 'all');
+  const loopClass = await B.getAttribute('#m-loop', 'class');
+  assert.ok(loopClass.split(' ').includes('on'), 'tekrar butonu açık görünmeli: ' + loopClass + ' / mod: ' + (await B.evaluate(() => window.__rv.music.loop)));
+  await B.click('.side-tab[data-tab=music]');
+  await B.click('#m-loop');
+  await A.waitForFunction(() => window.__rv.music.loop === 'one');
+  assert.equal(await A.textContent('#m-loop'), '🔂');
+
+  // Durdur: müzik herkeste durur
+  await A.click('#m-stop');
   for (const p of pages) await until(p, (s) => s.id === null && s.ytState !== PLAYING, 8000, 'durma');
   assert.equal(await B.isHidden('#np-pill'), true);
   for (const l of logs) t.diagnostic(l);

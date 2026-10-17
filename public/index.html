@@ -79,11 +79,11 @@
 
         <div id="tab-music" class="tab-body music tab-off">
           <form id="music-form" class="music-form" autocomplete="off">
-            <input id="music-input" maxlength="300" placeholder="YouTube linki yapıştır">
+            <input id="music-input" maxlength="300" placeholder="YouTube linki yapıştır" aria-label="YouTube linki ya da şarkı adı">
             <button class="btn primary" type="submit">Ekle</button>
           </form>
 
-          <p id="music-empty" class="hint">Şu an müzik çalmıyor. Bir YouTube linki ekle; odadaki herkeste aynı anda çalar.</p>
+          <p id="music-empty" class="hint">Şu an müzik çalmıyor. Bir YouTube linki (ya da arama açıksa şarkı adı) ekle; odadaki herkeste aynı anda çalar.</p>
           <p id="music-note" class="error" hidden></p>
 
           <div id="now-playing" class="now-playing" hidden>
@@ -91,17 +91,24 @@
             <div id="np-title" class="np-title"></div>
             <div id="np-sub" class="np-sub"></div>
             <div class="np-controls">
+              <button id="m-prev" class="btn ghost" title="Önceki şarkı (herkes için)">⏮️</button>
               <button id="m-pause" class="btn ghost" title="Duraklat (herkes için)">⏸️</button>
               <button id="m-skip" class="btn ghost" title="Geç (herkes için)">⏭️</button>
+              <button id="m-loop" class="btn ghost loop-btn" title="Tekrar: kapalı">🔁</button>
               <button id="m-stop" class="btn ghost" title="Durdur ve sırayı temizle">⏹️</button>
-              <span class="vol-wrap" title="Müzik sesi (sadece senin için)">🔉<input type="range" id="m-vol" min="0" max="100" value="35" aria-label="Müzik sesi"></span>
+              <span class="vol-wrap" title="Müzik sesi (sadece senin için)">🔉<input type="range" id="m-vol" min="0" max="100" value="35" aria-label="Müzik sesi"><span id="m-vol-val" class="num">35%</span></span>
             </div>
           </div>
 
           <div id="queue-head" class="queue-head" hidden>Sıradakiler</div>
           <ol id="music-queue" class="music-queue"></ol>
 
-          <p class="hint">Müzik herkesin kendi tarayıcısında çalar, mikrofondan gönderilmez. Ses seviyesi sadece senin için geçerli. Sohbette <b>/play link</b>, <b>/skip</b>, <b>/stop</b> da kullanılabilir.</p>
+          <div id="history-wrap" hidden>
+            <div class="queue-head">Son çalınanlar</div>
+            <ul id="music-history" class="music-queue history"></ul>
+          </div>
+
+          <p class="hint">Müzik herkesin kendi tarayıcısında çalar, mikrofondan gönderilmez. Ses seviyesi sadece senin için geçerli. Sohbette <b>/play</b>, <b>/skip</b>, <b>/prev</b>, <b>/loop</b>, <b>/stop</b> da kullanılabilir.</p>
         </div>
       </aside>
     </main>
@@ -148,7 +155,7 @@
       </div>
       <p class="hint" id="ptt-hint" hidden>⚠️ Tarayıcılar, sekme arka plandayken klavyeyi dinleyemez. Oyun tam ekrandayken bas-konuş çalışmaz; oyun sırasında <b>Açık mikrofon + ses eşiği</b> kullanın.</p>
 
-      <label for="gate-range">Ses eşiği <span id="gate-val" class="muted"></span></label>
+      <label for="gate-range">Ses eşiği <span id="gate-val" class="muted"></span> <span class="muted">· mikrofon:</span> <span id="meter-val" class="num">—</span></label>
       <div class="meter gate-meter" aria-hidden="true">
         <div id="meter-fill" class="meter-fill"></div>
         <div id="gate-mark" class="gate-mark"></div>
@@ -180,7 +187,9 @@
       </div>
       <div class="p-icons"><span class="i-mute" title="Mikrofon kapalı" hidden>🔇</span><span class="i-deaf" title="Sesi kapalı" hidden>🙉</span></div>
       <div class="p-volume" hidden>
-        <input type="range" min="0" max="100" value="100" class="vol" aria-label="Ses seviyesi">
+        <span class="vol-ico" aria-hidden="true">🔊</span>
+        <input type="range" min="0" max="200" step="5" value="100" class="vol" aria-label="Ses seviyesi" title="Ses seviyesi (çift tık: %100)">
+        <span class="vol-val num">100%</span>
         <button class="btn tiny ghost local-mute" title="Bu kişiyi sustur">🔈</button>
       </div>
     </div>

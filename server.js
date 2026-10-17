@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
+const { createYouTube, parseYouTubeId } = require('./youtube');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -67,50 +68,6 @@ function buildIceServers(env) {
 
 // ---------- Müzik (ortak YouTube çalma listesi) ----------
 
-function parseYouTubeId(input) {
-  if (typeof input !== 'string') return null;
-  const text = input.trim();
-  if (/^[A-Za-z0-9_-]{11}$/.test(text)) return text;
-  let url;
-  try {
-    url = new URL(text.startsWith('http') ? text : 'https://' + text);
-  } catch {
-    return null;
-  }
-  const host = url.hostname.replace(/^(www|m|music)\./, '');
-  let id = null;
-  if (host === 'youtu.be') id = url.pathname.slice(1).split('/')[0];
-  else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
-    if (url.pathname === '/watch') id = url.searchParams.get('v');
-    else {
-      const m = url.pathname.match(/^\/(shorts|embed|live|v)\/([^/?#]+)/);
-      if (m) id = m[2];
-    }
-  }
-  return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
-}
-
-/**
- * YouTube oEmbed ile başlık al. 401/403 = sahibi başka sitelerde oynatmayı kapatmış,
- * 404/400 = video yok. Ağ hatasında videoyu yine de kabul ederiz.
- */
-async function fetchYouTubeInfo(id) {
-  const url = 'https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + id);
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
-    if (res.status === 401 || res.status === 403) return { error: 'Bu video başka sitelerde oynatılmaya kapalı (sahibi engellemiş).' };
-    if (res.status === 404 || res.status === 400) return { error: 'Video bulunamadı.' };
-    if (!res.ok) return { title: null };
-    const j = await res.json();
-    return {
-      title: typeof j.title === 'string' ? j.title.slice(0, 120) : null,
-      author: typeof j.author_name === 'string' ? j.author_name.slice(0, 60) : null,
-    };
-  } catch {
-    return { title: null };
-  }
-}
-
 const MUSIC_QUEUE_MAX = 50;
 const MUSIC_START_DELAY_MS = 1500; // herkes videoyu yükleyebilsin diye şarkı biraz ileride başlar
 // Şarkı, bilinen süresi + bu pay dolunca sunucu tarafından geçilir. Pay, reklam izleyen
@@ -132,17 +89,33 @@ function createServer(options = {}) {
   const graceMs = options.graceMs ?? (Number(env.RECONNECT_GRACE_MS) || 20000);
   const heartbeatMs = options.heartbeatMs || 15000;
   const log = options.quiet ? () => {} : (...a) => console.log(new Date().toISOString(), ...a);
-  const getVideoInfo = options.fetchVideoInfo || fetchYouTubeInfo;
+  const youtube =
+    options.youtube ||
+    createYouTube({
+      apiKey: env.YOUTUBE_API_KEY,
+      region: env.MUSIC_REGION || 'TR',
+      oembed: options.fetchVideoInfo,
+      log,
+    });
   const musicStartDelay = options.musicStartDelayMs ?? MUSIC_START_DELAY_MS;
   const musicEndGrace = options.musicEndGraceMs ?? MUSIC_END_GRACE_MS;
 
-  /** Oda başına müzik durumu: { queue: [...], current: {..., startedAt, pausedAt} | null } */
+  /**
+   * Oda başına müzik durumu:
+   *   queue:   sıradaki şarkılar   [{ key, id, title, author, by, duration }]
+   *   current: çalan şarkı         { ...şarkı, key: çalma kimliği, itemKey, startedAt, pausedAt }
+   *            (aynı şarkı tekrar çalınınca yeni çalma kimliği alır ki herkes baştan başlasın)
+   *   history: çalınmış şarkılar, en yenisi başta (önceki şarkıya dönmek için)
+   *   loop:    'off' | 'all' (liste tekrarı) | 'one' (tek şarkı tekrarı)
+   */
   const music = new Map();
+  const HISTORY_MAX = 30;
+  const newKey = () => crypto.randomBytes(6).toString('hex');
 
   function musicOf(roomName) {
     let m = music.get(roomName);
     if (!m) {
-      m = { queue: [], current: null };
+      m = { queue: [], current: null, history: [], loop: 'off' };
       music.set(roomName, m);
     }
     return m;
@@ -150,19 +123,71 @@ function createServer(options = {}) {
 
   function musicSnapshot(roomName) {
     const m = music.get(roomName);
-    return { queue: m ? m.queue : [], current: m ? m.current : null, serverNow: Date.now() };
+    return {
+      queue: m ? m.queue : [],
+      current: m ? m.current : null,
+      history: m ? m.history.slice(0, 15) : [],
+      loop: m ? m.loop : 'off',
+      search: youtube.searchEnabled,
+      serverNow: Date.now(),
+    };
   }
 
   function broadcastMusic(roomName, event) {
     broadcast(roomName, { t: 'music', ...musicSnapshot(roomName), event: event || null });
   }
 
-  function playNext(roomName) {
+  /** Çalan şarkının sıra/geçmiş için sade hali */
+  function asItem(cur) {
+    return { key: cur.itemKey, id: cur.id, title: cur.title, author: cur.author, by: cur.by, duration: cur.duration || null };
+  }
+
+  function startItem(roomName, item) {
     const m = musicOf(roomName);
-    const next = m.queue.shift();
-    m.current = next ? { ...next, startedAt: Date.now() + musicStartDelay, pausedAt: null, duration: null } : null;
+    m.current = item
+      ? { ...item, itemKey: item.key, key: newKey(), startedAt: Date.now() + musicStartDelay, pausedAt: null, duration: item.duration || null }
+      : null;
     m.failedBy = new Set();
+    m.altPending = false;
     scheduleMusicEnd(roomName);
+  }
+
+  /**
+   * Sıradakine geç. how: 'ended' (şarkı bitti), 'skip' (biri geçti), 'failed' (çalınamadı).
+   * Tek şarkı tekrarında biten şarkı baştan çalar; liste tekrarında biten/geçilen şarkı sıranın sonuna eklenir.
+   */
+  function advance(roomName, how) {
+    const m = musicOf(roomName);
+    const cur = m.current;
+    if (cur) {
+      if (how === 'ended' && m.loop === 'one') return startItem(roomName, asItem(cur));
+      if (how !== 'failed') {
+        m.history.unshift(asItem(cur));
+        if (m.history.length > HISTORY_MAX) m.history.pop();
+        if (m.loop === 'all' && m.queue.length < MUSIC_QUEUE_MAX) m.queue.push(asItem(cur));
+      }
+    }
+    startItem(roomName, m.queue.shift() || null);
+  }
+
+  /** Önceki şarkıya dön; çalan şarkı sıranın başına geri konur. Geçmiş boşsa çalanı baştan başlatır. */
+  function previous(roomName) {
+    const m = musicOf(roomName);
+    const cur = m.current;
+    const prev = m.history.shift();
+    if (!prev) {
+      if (!cur) return null;
+      startItem(roomName, asItem(cur));
+      return asItem(cur);
+    }
+    // Liste tekrarında önceki şarkı bittiğinde sıranın sonuna eklenmişti; çift olmasın
+    if (m.loop === 'all') {
+      const last = m.queue.length - 1;
+      if (last >= 0 && m.queue[last].key === prev.key) m.queue.pop();
+    }
+    if (cur) m.queue.unshift(asItem(cur));
+    startItem(roomName, prev);
+    return prev;
   }
 
   /**
@@ -182,7 +207,7 @@ function createServer(options = {}) {
     m.endTimer = setTimeout(() => {
       const mm = music.get(roomName);
       if (!mm || !mm.current || mm.current.key !== key || mm.current.pausedAt != null) return;
-      playNext(roomName);
+      advance(roomName, 'ended');
       broadcastMusic(roomName, null);
     }, Math.max(0, at - Date.now()));
     if (m.endTimer.unref) m.endTimer.unref();
@@ -442,11 +467,8 @@ function createServer(options = {}) {
 
         case 'music-add': {
           if (!member || member.ws !== ws) return;
-          const id = parseYouTubeId(msg.url);
-          if (!id) {
-            send(ws, { t: 'music-error', message: 'Geçerli bir YouTube linki değil.' });
-            return;
-          }
+          const input = typeof msg.url === 'string' ? msg.url.trim() : '';
+          if (!input) return;
           musicTimes = musicTimes.filter((t) => now - t < 10000);
           if (musicTimes.length >= 5) {
             send(ws, { t: 'music-error', message: 'Çok hızlı ekliyorsun, biraz bekle.' });
@@ -458,30 +480,59 @@ function createServer(options = {}) {
             return;
           }
           const adder = member;
-          Promise.resolve(getVideoInfo(id))
-            .then((info) => {
+          Promise.resolve(youtube.resolve(input))
+            .then((res) => {
               // Bu sırada kişi ayrılmış veya oda kapanmış olabilir
               const room = rooms.get(adder.room);
               if (!room || room.get(adder.id) !== adder) return;
-              if (info && info.error) {
-                send(adder.ws, { t: 'music-error', message: info.error });
+              if (!res || res.error) {
+                send(adder.ws, { t: 'music-error', message: (res && res.error) || 'Şarkı eklenemedi.' });
                 return;
               }
               const m = musicOf(adder.room);
               if (m.queue.length >= MUSIC_QUEUE_MAX) return;
-              const item = {
-                key: crypto.randomBytes(6).toString('hex'),
-                id,
-                title: (info && info.title) || `YouTube videosu (${id})`,
-                author: (info && info.author) || null,
-                by: adder.name,
-              };
+              const v = res.item;
+              const item = { key: newKey(), id: v.id, title: v.title, author: v.author || null, by: adder.name, duration: v.duration || null };
               m.queue.push(item);
               const startNow = !m.current;
-              if (startNow) playNext(adder.room);
-              broadcastMusic(adder.room, startNow ? `🎵 ${adder.name} çalıyor: ${item.title}` : `🎵 ${adder.name} sıraya ekledi: ${item.title}`);
+              if (startNow) startItem(adder.room, m.queue.shift());
+              let event = startNow ? `🎵 ${adder.name} çalıyor: ${item.title}` : `🎵 ${adder.name} sıraya ekledi: ${item.title}`;
+              if (res.replaced) event += ` (orijinali "${res.replaced.title}" çalınamıyor: ${res.replaced.reason}; çalınabilen versiyonu eklendi)`;
+              broadcastMusic(adder.room, event);
             })
             .catch((err) => log('music-add', err));
+          return;
+        }
+
+        case 'music-prev': {
+          if (!member || member.ws !== ws) return;
+          const prev = previous(member.room);
+          if (!prev) return;
+          broadcastMusic(member.room, `⏮️ ${member.name} önceki şarkıya döndü: ${prev.title}`);
+          return;
+        }
+
+        case 'music-loop': {
+          if (!member || member.ws !== ws) return;
+          if (!['off', 'all', 'one'].includes(msg.mode)) return;
+          const m = musicOf(member.room);
+          if (m.loop === msg.mode) return;
+          m.loop = msg.mode;
+          const names = { off: 'kapalı', all: 'liste tekrarı', one: 'tek şarkı tekrarı' };
+          broadcastMusic(member.room, `🔁 ${member.name}: tekrar modu ${names[msg.mode]}`);
+          return;
+        }
+
+        case 'music-requeue': {
+          // Geçmişteki bir şarkıyı tekrar sıraya ekle
+          if (!member || member.ws !== ws) return;
+          const m = music.get(member.room);
+          const h = m && m.history.find((x) => x.key === msg.key);
+          if (!h || m.queue.length >= MUSIC_QUEUE_MAX) return;
+          const item = { ...h, key: newKey(), by: member.name };
+          m.queue.push(item);
+          if (!m.current) startItem(member.room, m.queue.shift());
+          broadcastMusic(member.room, `🎵 ${member.name} tekrar sıraya ekledi: ${item.title}`);
           return;
         }
 
@@ -514,10 +565,14 @@ function createServer(options = {}) {
           let event = null;
           if (msg.t === 'music-skip') {
             if (!cur) return;
-            playNext(member.room);
+            advance(member.room, 'skip');
             event = `⏭️ ${member.name} geçti: ${cur.title}`;
           } else if (msg.t === 'music-stop') {
             if (!cur && !m.queue.length) return;
+            if (cur) {
+              m.history.unshift(asItem(cur));
+              if (m.history.length > HISTORY_MAX) m.history.pop();
+            }
             m.queue = [];
             m.current = null;
             scheduleMusicEnd(member.room);
@@ -548,7 +603,7 @@ function createServer(options = {}) {
               if (cur.pausedAt != null) return;
               const elapsed = (now - cur.startedAt) / 1000;
               if (cur.duration ? elapsed < cur.duration - 5 : elapsed < 25) return;
-              playNext(member.room);
+              advance(member.room, 'ended');
             } else {
               // Oynatılamama: bir kişideki sorun herkesin müziğini kesmesin.
               // Ancak odadakilerin yarısından fazlası oynatamıyorsa geçilir.
@@ -559,8 +614,24 @@ function createServer(options = {}) {
                 send(ws, { t: 'music-error', message: `Bu video sende oynatılamıyor: ${reason}. Diğerlerinde çalmaya devam ediyor.` });
                 return;
               }
-              playNext(member.room);
-              event = `⚠️ Oynatılamadı, geçildi: ${cur.title} (${reason})`;
+              // Çoğunluk oynatamıyor: API anahtarı varsa aynı şarkının çalınabilen versiyonunu dene
+              if (m.altPending) return;
+              m.altPending = true;
+              const roomName = member.room;
+              Promise.resolve(youtube.alternativeFor(cur))
+                .then((alt) => {
+                  const mm = music.get(roomName);
+                  if (!mm || mm.current !== cur) return; // bu arada değişti
+                  if (alt) {
+                    startItem(roomName, { key: cur.itemKey, id: alt.id, title: alt.title, author: alt.author, by: cur.by, duration: alt.duration });
+                    broadcastMusic(roomName, `🔄 "${cur.title}" çalınamadı (${reason}); yerine çalınabilen versiyonu: ${alt.title}`);
+                  } else {
+                    advance(roomName, 'failed');
+                    broadcastMusic(roomName, `⚠️ Oynatılamadı, geçildi: ${cur.title} (${reason})`);
+                  }
+                })
+                .catch((err) => log('music-alt', err));
+              return;
             }
           }
           broadcastMusic(member.room, event);
