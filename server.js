@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
-const { createYouTube, parseYouTubeId } = require('./youtube');
+const { createYouTube, parseYouTubeId } = require('./sources');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -76,6 +76,9 @@ const MUSIC_END_GRACE_MS = 8000;
 
 /** YouTube oynatıcı hata kodlarının açıklaması */
 function youtubeErrorText(code) {
+  if (code === 'sc-snip') return 'SoundCloud bu parçanın sadece 30 sn önizlemesini veriyor';
+  if (code === 'sc-block') return 'SoundCloud bu parçayı burada çalmıyor';
+  if (code === 'sc-error') return 'SoundCloud oynatıcı hatası';
   if (code === 101 || code === 150 || code === 152) return 'YouTube bu videonun başka sitelerde oynatılmasına izin vermiyor (telif ya da yaş sınırı)';
   if (code === 100) return 'video kaldırılmış ya da gizli';
   if (code === 2) return 'geçersiz video';
@@ -95,6 +98,7 @@ function createServer(options = {}) {
       apiKey: env.YOUTUBE_API_KEY,
       region: env.MUSIC_REGION || 'TR',
       oembed: options.fetchVideoInfo,
+      soundcloud: options.fetchSoundCloud,
       log,
     });
   const musicStartDelay = options.musicStartDelayMs ?? MUSIC_START_DELAY_MS;
@@ -139,7 +143,7 @@ function createServer(options = {}) {
 
   /** Çalan şarkının sıra/geçmiş için sade hali */
   function asItem(cur) {
-    return { key: cur.itemKey, id: cur.id, title: cur.title, author: cur.author, by: cur.by, duration: cur.duration || null };
+    return { key: cur.itemKey, source: cur.source || 'yt', id: cur.id, title: cur.title, author: cur.author, by: cur.by, duration: cur.duration || null };
   }
 
   function startItem(roomName, item) {
@@ -492,7 +496,7 @@ function createServer(options = {}) {
               const m = musicOf(adder.room);
               if (m.queue.length >= MUSIC_QUEUE_MAX) return;
               const v = res.item;
-              const item = { key: newKey(), id: v.id, title: v.title, author: v.author || null, by: adder.name, duration: v.duration || null };
+              const item = { key: newKey(), source: v.source || 'yt', id: v.id, title: v.title, author: v.author || null, by: adder.name, duration: v.duration || null };
               m.queue.push(item);
               const startNow = !m.current;
               if (startNow) startItem(adder.room, m.queue.shift());
@@ -609,7 +613,8 @@ function createServer(options = {}) {
               // Ancak odadakilerin yarısından fazlası oynatamıyorsa geçilir.
               if (!m.failedBy) m.failedBy = new Set();
               m.failedBy.add(member.id);
-              const reason = youtubeErrorText(typeof msg.code === 'number' ? msg.code : null);
+              const code = typeof msg.code === 'number' || ['sc-snip', 'sc-block', 'sc-error'].includes(msg.code) ? msg.code : null;
+              const reason = youtubeErrorText(code);
               if (m.failedBy.size * 2 <= onlineCount(member.room)) {
                 send(ws, { t: 'music-error', message: `Bu video sende oynatılamıyor: ${reason}. Diğerlerinde çalmaya devam ediyor.` });
                 return;
@@ -623,7 +628,7 @@ function createServer(options = {}) {
                   const mm = music.get(roomName);
                   if (!mm || mm.current !== cur) return; // bu arada değişti
                   if (alt) {
-                    startItem(roomName, { key: cur.itemKey, id: alt.id, title: alt.title, author: alt.author, by: cur.by, duration: alt.duration });
+                    startItem(roomName, { key: cur.itemKey, source: 'yt', id: alt.id, title: alt.title, author: alt.author, by: cur.by, duration: alt.duration });
                     broadcastMusic(roomName, `🔄 "${cur.title}" çalınamadı (${reason}); yerine çalınabilen versiyonu: ${alt.title}`);
                   } else {
                     advance(roomName, 'failed');

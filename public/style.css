@@ -196,3 +196,9 @@ label.check { border: 0; padding: 6px 0; margin-top: 8px; }
 .music-queue.history { list-style: none; padding-left: 0; opacity: .85; }
 .music-queue .btn.tiny { padding: 1px 7px; }
 .np-controls .vol-wrap { flex: 1 1 100%; margin: 4px 0 0; }
+
+/* SoundCloud: sadece ses, kısa kutu */
+.player-box.sc { aspect-ratio: auto; height: 120px; background: transparent; }
+.player-box .sc-frame { width: 100%; height: 100%; border: 0; display: block; }
+.music-off { font-size: 12.5px; padding: 5px 9px; }
+.music-off.on { border-color: var(--red); color: #ff9a9d; background: #3a1418; }

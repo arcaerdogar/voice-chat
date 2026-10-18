@@ -12,7 +12,7 @@
     "test:turn": "node --test test/turn.test.js",
     "test:music": "node --test test/music.test.js",
     "test:noise": "node --test test/noise.test.js",
-    "test:youtube": "node --test test/youtube.test.js"
+    "test:sources": "node --test test/sources.test.js"
   },
   "engines": {
     "node": ">=18"

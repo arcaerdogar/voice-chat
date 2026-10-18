@@ -1,6 +1,7 @@
 'use strict';
 
-// YouTube yardımcıları: link ayrıştırma, video bilgisi ve (API anahtarı varsa) arama.
+// Müzik kaynakları: YouTube (video + ses) ve SoundCloud (sadece ses, ~5 kat az internet).
+// Link ayrıştırma, parça bilgisi ve (YouTube API anahtarı varsa) arama.
 //
 // Telifli müzik notu: Sesi YouTube'dan indirip yeniden yayınlamıyoruz (YouTube kurallarına
 // aykırı ve telifli içeriği yeniden dağıtmak olur). Bunun yerine her zaman YouTube'un resmi
@@ -33,7 +34,51 @@ function parseYouTubeId(input) {
   return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
 }
 
-/** Linke benziyor mu (YouTube dışı bir link de olabilir) */
+/**
+ * SoundCloud parça linki → oEmbed'e verilecek temiz adres.
+ * Dönüş: { url } | { error } | null (SoundCloud linki değil)
+ */
+function parseSoundCloudUrl(input) {
+  if (typeof input !== 'string') return null;
+  const text = input.trim();
+  let url;
+  try {
+    url = new URL(text.startsWith('http') ? text : 'https://' + text);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.replace(/^(www|m)\./, '');
+  if (host === 'on.soundcloud.com') return url.pathname.length > 1 ? { url: 'https://on.soundcloud.com' + url.pathname } : null;
+  if (host !== 'soundcloud.com') return null;
+  const parts = url.pathname.split('/').filter(Boolean);
+  if (parts.length < 2) return { error: 'Bu bir SoundCloud profil linki; tek bir parçanın linkini yapıştırın.' };
+  if (parts[1] === 'sets') return { error: 'SoundCloud çalma listeleri desteklenmiyor; parçaları tek tek ekleyin.' };
+  if (['likes', 'reposts', 'tracks', 'albums', 'popular-tracks', 'followers', 'following'].includes(parts[1])) {
+    return { error: 'Tek bir SoundCloud parçasının linkini yapıştırın.' };
+  }
+  return { url: 'https://soundcloud.com/' + parts.slice(0, 2).join('/') };
+}
+
+/** SoundCloud oEmbed: başlık, sanatçı ve kalıcı parça adresi (api.soundcloud.com/tracks/ID) */
+async function fetchSoundCloud(url, fetchImpl = fetch) {
+  try {
+    const res = await fetchImpl('https://soundcloud.com/oembed?format=json&url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(5000) });
+    if (res.status === 404 || res.status === 403) return { notFound: true };
+    if (!res.ok) return { error: 'SoundCloud şu an yanıt vermiyor.' };
+    const j = await res.json();
+    const m = typeof j.html === 'string' && j.html.match(/url=([^&"]+)/);
+    const api = m ? decodeURIComponent(m[1]) : null;
+    if (api && /\/playlists\//.test(api)) return { error: 'SoundCloud çalma listeleri desteklenmiyor; parçaları tek tek ekleyin.' };
+    const author = typeof j.author_name === 'string' ? j.author_name.slice(0, 60) : null;
+    let title = typeof j.title === 'string' ? j.title : 'SoundCloud parçası';
+    if (author && title.endsWith(' by ' + author)) title = title.slice(0, -(' by ' + author).length);
+    return { id: api && /^https:\/\/api\.soundcloud\.com\/tracks\/\d+$/.test(api) ? api : url, title: title.slice(0, 120), author };
+  } catch {
+    return { error: 'SoundCloud şu an yanıt vermiyor.' };
+  }
+}
+
+/** Linke benziyor mu (desteklenmeyen bir site de olabilir) */
 function looksLikeUrl(text) {
   return /^(https?:\/\/|www\.)/i.test(text.trim()) || /^[\w-]+(\.[\w-]+)+\/\S*$/.test(text.trim());
 }
@@ -89,6 +134,7 @@ function createYouTube(opts = {}) {
   const region = (opts.region || 'TR').toUpperCase();
   const fetchImpl = opts.fetchImpl || fetch;
   const oembed = opts.oembed || ((id) => fetchOEmbed(id, fetchImpl));
+  const soundcloud = opts.soundcloud || ((url) => fetchSoundCloud(url, fetchImpl));
   const log = opts.log || (() => {});
   const searchCache = new Map(); // sorgu → { at, ids }
   let quotaUntil = 0; // kota dolunca bir süre API'yi deneme
@@ -179,11 +225,20 @@ function createYouTube(opts = {}) {
    */
   async function resolve(input) {
     const text = typeof input === 'string' ? input.trim().slice(0, 300) : '';
-    if (!text) return { error: 'Bir YouTube linki ya da şarkı adı yaz.' };
-    const id = parseYouTubeId(text);
+    if (!text) return { error: 'Bir YouTube / SoundCloud linki ya da şarkı adı yaz.' };
 
+    const sc = parseSoundCloudUrl(text);
+    if (sc) {
+      if (sc.error) return { error: sc.error };
+      const info = await soundcloud(sc.url);
+      if (info.notFound) return { error: 'SoundCloud parçası bulunamadı (gizli ya da silinmiş olabilir).' };
+      if (info.error) return { error: info.error };
+      return { item: { source: 'sc', id: info.id, title: info.title, author: info.author, duration: null } };
+    }
+
+    const id = parseYouTubeId(text);
     if (!id) {
-      if (looksLikeUrl(text)) return { error: 'Sadece YouTube linkleri destekleniyor.' };
+      if (looksLikeUrl(text)) return { error: 'Sadece YouTube ve SoundCloud linkleri destekleniyor.' };
       if (!apiKey) return { error: 'Şarkı adıyla arama için sunucuda YouTube API anahtarı ayarlı değil. YouTube linki yapıştırın.' };
       try {
         const v = await findPlayable(text, null);
@@ -221,10 +276,14 @@ function createYouTube(opts = {}) {
     return { item: { id, title: (info && info.title) || `YouTube videosu (${id})`, author: (info && info.author) || null, duration: null } };
   }
 
-  /** Çalınırken oynatılamayan bir şarkı için alternatif (API anahtarı gerekir) */
+  /**
+   * Çalınırken oynatılamayan bir şarkı için YouTube'da çalınabilen bir versiyon (API anahtarı gerekir).
+   * SoundCloud'da sadece önizleme veren parçalar için de kullanılır.
+   */
   async function alternativeFor(item) {
     if (!apiKey) return null;
     try {
+      if (item.source === 'sc') return await findPlayable(`${item.author || ''} ${cleanTitle(item.title)}`.trim(), null);
       return await findPlayable(cleanTitle(item.title), item.id);
     } catch (err) {
       log('youtube alternative', err.message);
@@ -235,4 +294,4 @@ function createYouTube(opts = {}) {
   return { searchEnabled: !!apiKey, resolve, alternativeFor };
 }
 
-module.exports = { createYouTube, parseYouTubeId, parseIsoDuration, cleanTitle, fetchOEmbed };
+module.exports = { createYouTube, parseYouTubeId, parseSoundCloudUrl, parseIsoDuration, cleanTitle, fetchOEmbed, fetchSoundCloud };

@@ -21,7 +21,7 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
 - Opus ses, yankı engelleme, otomatik kazanç (ayarlardan kapatılabilir)
 - **Yapay zekâ gürültü engelleme (RNNoise)**: hoparlörden mikrofona giren oyun efektleri, klavye, fan sesi silinir; konuşma korunur
 - **Otomatik ses eşiği**: konuşmadığın anlarda mikrofon tamamen susar (RNNoise'un konuşma algılamasıyla). Sekme arka plandayken de çalışır (AudioWorklet)
-- **Müzik botu**: YouTube linki ya da (API anahtarıyla) şarkı adı ekle, odadaki herkeste aynı anda çalar. Ortak sıra, önceki şarkı, liste/tek şarkı tekrarı, son çalınanlar, duraklat/geç/durdur, kişisel müzik sesi; sohbette `/play`, `/skip`, `/prev`, `/loop`, `/stop`, `/pause`, `/resume`
+- **Müzik botu**: YouTube / SoundCloud linki ya da (API anahtarıyla) şarkı adı ekle, odadaki herkeste aynı anda çalar. Ortak sıra, önceki şarkı, liste/tek şarkı tekrarı, son çalınanlar, duraklat/geç/durdur, kişisel müzik sesi; sohbette `/play`, `/skip`, `/prev`, `/loop`, `/stop`, `/pause`, `/resume`
 - **Kişi sesi %0–200**: sessiz konuşan arkadaşını iki katına kadar yükselt (sınırlayıcıyla, patlamadan). Tüm ses kaydırıcıları yüzde olarak gösterilir
 - Açık mikrofon veya bas-konuş (klavye tuşu ya da farenin yan tuşları)
 - Kişi bazlı ses seviyesi ve yerel susturma
@@ -62,7 +62,10 @@ Ses sunucudan yayınlanmaz. Sunucu sadece ortak sırayı ve "şu şarkı şu san
 herkesin tarayıcısı resmi YouTube oynatıcısıyla aynı videoyu aynı konumda çalar (±2 sn içinde senkron).
 Böylece sunucuya yük binmez, müzik mikrofondan gönderilmez ve herkes müzik sesini kendisi ayarlar.
 
-- YouTube linkleri desteklenir (`youtube.com/watch`, `youtu.be`, `music.youtube.com`, `shorts`). Sunucuda `YOUTUBE_API_KEY` varsa şarkı adıyla da eklenebilir.
+- YouTube (`youtube.com/watch`, `youtu.be`, `music.youtube.com`, `shorts`) ve SoundCloud parça linkleri desteklenir. Sunucuda `YOUTUBE_API_KEY` varsa şarkı adıyla da eklenebilir.
+- **İnternet kullanımı:** YouTube'un resmi oynatıcısı sadece ses çalamaz ve kaliteyi düşürmeye izin vermez; ölçümlerde boyuttan bağımsız 480p, kişi başı **saatte ~350–450 MB**.
+  SoundCloud sadece ses çalar: **saatte ~70 MB**. İnterneti kısıtlı olan kişi **🔔 Bende kapat** ile müziği sadece kendinde kapatabilir (hiç veri harcamaz, diğerlerinde çalar).
+- SoundCloud'da büyük plak şirketlerinin bazı parçaları gömülü oynatıcıda sadece 30 sn önizleme verir; uygulama bunu algılar, API anahtarı varsa YouTube versiyonuna geçer, yoksa açıklamayla atlar.
 - **Telifli / çalınamayan videolar:** Bazı videolar (çoğunlukla plak şirketlerinin resmi klipleri) YouTube dışında oynatılamaz, yaş sınırlı ya da Türkiye'de engelli olabilir.
   API anahtarı varsa uygulama bunu eklerken (ya da çalarken) fark eder ve aynı şarkının çalınabilen bir versiyonunu (Topic kanalı, lyrics, audio) otomatik bulup onu çalar.
   Ses hiçbir zaman YouTube'dan indirilip yeniden yayınlanmaz; her zaman YouTube'un resmi oynatıcısı kullanılır.

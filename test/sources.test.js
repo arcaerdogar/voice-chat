@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { createYouTube, parseIsoDuration, cleanTitle } = require('../youtube');
+const { createYouTube, parseIsoDuration, cleanTitle } = require('../sources');
 
 /** Sahte YouTube Data API: videos ve search uç noktaları */
 function fakeApi(videos, searches, calls = []) {
@@ -116,4 +116,31 @@ test('YouTube: API anahtarı yokken linkler oEmbed ile çalışır, arama kapal�
   assert.match(blocked.error, /API anahtarı/);
   assert.match((await yt.resolve('tarkan şımarık')).error, /API anahtarı ayarlı değil/);
   assert.equal(await yt.alternativeFor({ id: 'x', title: 'y' }), null);
+});
+
+test('SoundCloud: linkler tanınır, parça bilgisi alınır, liste/profil linkleri reddedilir', async () => {
+  const { parseSoundCloudUrl } = require('../sources');
+  assert.deepEqual(parseSoundCloudUrl('https://soundcloud.com/forss/flickermood?si=x&in=y'), { url: 'https://soundcloud.com/forss/flickermood' });
+  assert.deepEqual(parseSoundCloudUrl('m.soundcloud.com/forss/flickermood'), { url: 'https://soundcloud.com/forss/flickermood' });
+  assert.deepEqual(parseSoundCloudUrl('https://on.soundcloud.com/AbC123'), { url: 'https://on.soundcloud.com/AbC123' });
+  assert.match(parseSoundCloudUrl('https://soundcloud.com/forss').error, /profil/);
+  assert.match(parseSoundCloudUrl('https://soundcloud.com/forss/sets/soulhack').error, /çalma listeleri/);
+  assert.equal(parseSoundCloudUrl('https://youtu.be/dQw4w9WgXcQ'), null);
+
+  const yt = createYouTube({
+    soundcloud: async (url) =>
+      url.includes('yok') ? { notFound: true } : { id: 'https://api.soundcloud.com/tracks/293', title: 'Flickermood', author: 'Forss' },
+  });
+  const ok = await yt.resolve('https://soundcloud.com/forss/flickermood');
+  assert.deepEqual(ok.item, { source: 'sc', id: 'https://api.soundcloud.com/tracks/293', title: 'Flickermood', author: 'Forss', duration: null });
+  assert.match((await yt.resolve('https://soundcloud.com/forss/yok-boyle')).error, /bulunamadı/);
+  assert.match((await yt.resolve('https://open.spotify.com/track/abc')).error, /YouTube ve SoundCloud/);
+});
+
+test('SoundCloud: sadece önizleme veren parçaya YouTube alternatifi aranır', async () => {
+  const calls = [];
+  const videos = { YTVERSION1: video('YTVERSION1', 'Ed Sheeran - Shape of You (Lyrics)') };
+  const yt = createYouTube({ apiKey: 'k', fetchImpl: fakeApi(videos, { 'Ed Sheeran Shape of You': ['YTVERSION1'] }, calls) });
+  const alt = await yt.alternativeFor({ source: 'sc', id: 'https://api.soundcloud.com/tracks/1', title: 'Shape of You', author: 'Ed Sheeran' });
+  assert.equal(alt.id, 'YTVERSION1');
 });

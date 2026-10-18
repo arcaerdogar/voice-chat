@@ -24,17 +24,19 @@ const state = (page) =>
   page.evaluate(() => {
     const S = window.__rv;
     const cur = S.music.current;
-    const yt = S.yt;
+    const pl = S.player;
     const pos = cur ? (cur.pausedAt != null ? cur.pausedAt : (Date.now() + S.clockOffset - cur.startedAt) / 1000) : null;
     return {
       id: cur && cur.id,
       title: cur && cur.title,
+      source: cur && (cur.source || 'yt'),
       queue: S.music.queue.length,
-      ytState: yt ? yt.getPlayerState() : null,
-      time: yt ? yt.getCurrentTime() : null,
+      kind: pl ? pl.kind : null,
+      ytState: pl ? pl.state() : null,
+      time: pl ? pl.time() : null,
       expected: pos,
-      muted: yt ? yt.isMuted() : null,
-      volume: yt ? yt.getVolume() : null,
+      muted: pl ? pl.muted() : null,
+      volume: pl ? pl.volume() : null,
     };
   });
 
@@ -53,8 +55,10 @@ sohbet: ${chat}`);
 }
 
 const logs = [];
-const PLAYING = 1;
-const PAUSED = 2;
+const PLAYING = 'playing';
+const PAUSED = 'paused';
+const SC_FULL = 'https://soundcloud.com/forss/flickermood'; // tam çalınabilen parça (3:33)
+const SC_SNIP = 'https://soundcloud.com/edsheeran/shape-of-you'; // gömülü oynatıcıda sadece 30 sn önizleme
 
 test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yansır', { timeout: 180000 }, async (t) => {
   if (!(await youtubeReachable())) {
@@ -182,5 +186,97 @@ test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yans
   await A.click('#m-stop');
   for (const p of pages) await until(p, (s) => s.id === null && s.ytState !== PLAYING, 8000, 'durma');
   assert.equal(await B.isHidden('#np-pill'), true);
+  for (const l of logs) t.diagnostic(l);
+});
+
+async function soundcloudReachable() {
+  try {
+    const r = await fetch('https://soundcloud.com/oembed?format=json&url=' + encodeURIComponent(SC_FULL), { signal: AbortSignal.timeout(5000) });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+test('Müzik: SoundCloud (sadece ses), "bende kapat" ve önizleme algılama', { timeout: 180000 }, async (t) => {
+  if (!(await soundcloudReachable())) {
+    t.skip('SoundCloud erişilemiyor');
+    return;
+  }
+  const srv = createServer({ quiet: true, env: {} });
+  await new Promise((r) => srv.server.listen(PORT + 1, r));
+  const browser = await chromium.launch({
+    channel: 'chrome',
+    args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
+  });
+  t.after(async () => {
+    await browser.close().catch(() => {});
+    await srv.close();
+  });
+  const pages = [];
+  const mediaBytes = {};
+  for (const name of ['Ahri', 'Brand']) {
+    const ctx = await browser.newContext({ permissions: ['microphone'] });
+    mediaBytes[name] = 0;
+    // Müzik akışının indirdiği baytlar (SoundCloud ses dosyaları)
+    ctx.on('requestfinished', async (req) => {
+      if (!/sndcdn.com|soundcloud.cloud/.test(req.url())) return;
+      try {
+        const s = await req.sizes();
+        mediaBytes[name] += s.responseBodySize;
+      } catch {}
+    });
+    const page = await ctx.newPage();
+    page.on('console', (m) => {
+      if (/müzik/.test(m.text())) logs.push(`[${name}] ${m.text()}`);
+    });
+    await page.goto(`http://localhost:${PORT + 1}/r/sc-e2e`);
+    await page.fill('#name-input', name);
+    await page.click('#join-btn');
+    await page.waitForSelector('#room-view:not([hidden])');
+    pages.push(page);
+  }
+  const [A, B] = pages;
+
+  await A.click('.side-tab[data-tab=music]');
+  await A.fill('#music-input', SC_FULL);
+  await A.click('#music-form button[type=submit]');
+  for (const p of pages) {
+    const s = await until(p, (s) => s.source === 'sc' && s.kind === 'sc' && s.ytState === PLAYING && s.time > 1, 30000, 'SoundCloud çalma');
+    assert.equal(s.title, 'Flickermood');
+  }
+  // Süre parça yüklenince bilinir ve sunucuya bildirilir
+  await until(A, () => true, 1000);
+  assert.ok(Math.abs(srv.musicForTest('sc-e2e').current.duration - 213.9) < 1, 'SoundCloud süresi bildirilmeli');
+  // Senkron
+  await new Promise((r) => setTimeout(r, 2500));
+  for (const p of pages) {
+    const s = await state(p);
+    assert.ok(Math.abs(s.time - s.expected) < 2.5, `SoundCloud senkron dışı: ${s.time.toFixed(1)} / ${s.expected.toFixed(1)}`);
+  }
+  // Sadece ses: sayfada YouTube oynatıcısı yok
+  assert.equal(await A.locator('#player-box iframe[src*="youtube"]').count(), 0);
+
+  // "Bende kapat": Brand'de oynatıcı tamamen kapanır, internet harcamaz; Ahri'de çalmaya devam eder
+  await B.click('.side-tab[data-tab=music]');
+  await B.click('#m-off');
+  await until(B, (s) => s.kind === null, 5000, 'oynatıcının kapanması');
+  assert.match(await B.textContent('#m-off'), /sende kapalı/);
+  const before = mediaBytes.Brand;
+  await new Promise((r) => setTimeout(r, 6000));
+  assert.equal(mediaBytes.Brand, before, 'müzik kapalıyken hiç ses verisi indirilmemeli');
+  assert.equal((await state(A)).ytState, PLAYING, 'diğerlerinde çalmaya devam etmeli');
+  // Tekrar açınca kaldığı yerden (herkesle aynı konumda) başlar
+  await B.click('#m-off');
+  const back = await until(B, (s) => s.kind === 'sc' && s.ytState === PLAYING && s.time > 5, 20000, 'tekrar açılma');
+  assert.ok(Math.abs(back.time - back.expected) < 3, 'tekrar açınca herkesle aynı yerde olmalı');
+
+  // Sadece önizleme veren parça: herkeste algılanır, API anahtarı yoksa açıklamayla geçilir
+  await A.fill('#music-input', SC_SNIP);
+  await A.click('#music-form button[type=submit]');
+  await until(A, (s) => s.queue === 1, 10000, 'sıraya ekleme');
+  await A.click('#m-skip');
+  await until(A, (s) => s.id === null, 30000, 'önizlemenin geçilmesi');
+  assert.match(await B.textContent('#chat-log'), /sadece 30 sn önizlemesini veriyor/);
   for (const l of logs) t.diagnostic(l);
 });

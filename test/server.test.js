@@ -499,3 +499,31 @@ test('Müzik: çalarken çoğunlukta oynatılamayan şarkının yerine çalınab
     await srv.close();
   }
 });
+
+test('Müzik: SoundCloud önizleme parçası çoğunlukta oynatılamazsa YouTube versiyonuna geçilir', async () => {
+  const youtube = {
+    searchEnabled: true,
+    resolve: async () => ({ item: { source: 'sc', id: 'https://api.soundcloud.com/tracks/1', title: 'Shape of You', author: 'Ed Sheeran', duration: null } }),
+    alternativeFor: async (item) => (item.source === 'sc' ? { id: 'YTVERSION1', title: 'Ed Sheeran - Shape of You (Lyrics)', author: 'X', duration: 234 } : null),
+  };
+  const srv = await start({ musicStartDelayMs: 0, youtube });
+  try {
+    const a = await client(srv);
+    a.send({ t: 'join', room: 'sc', id: ID_A, name: 'Ali' });
+    await a.wait((m) => m.t === 'welcome');
+    a.send({ t: 'music-add', url: 'https://soundcloud.com/edsheeran/shape-of-you' });
+    const s1 = await a.wait((m) => m.t === 'music' && m.current);
+    assert.equal(s1.current.source, 'sc');
+    a.send({ t: 'music-failed', key: s1.current.key, code: 'sc-snip' });
+    const s2 = await a.wait((m) => m.t === 'music' && m.current && m.current.id === 'YTVERSION1');
+    assert.equal(s2.current.source, 'yt');
+    assert.match(s2.event, /sadece 30 sn önizlemesini veriyor/);
+    // Tanınmayan hata kodları metne karışmaz
+    a.send({ t: 'music-failed', key: s2.current.key, code: '<script>' });
+    const s3 = await a.wait((m) => m.t === 'music' && m.current === null);
+    assert.match(s3.event, /\(YouTube hatası\)$/);
+    a.close();
+  } finally {
+    await srv.close();
+  }
+});

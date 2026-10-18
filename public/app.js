@@ -77,12 +77,14 @@
     clockOffset: 0, // sunucu saati - yerel saat (ms)
     music: { queue: [], current: null, history: [], loop: 'off', search: false },
     musicVol: store.get('musicVol', 35),
-    yt: null,
-    ytCreating: null,
-    ytKey: null,
-    ytEndedSent: false,
-    ytReported: { key: null, d: 0 },
-    ytStartTimer: null,
+    player: null, // çalan oynatıcı (YouTube ya da SoundCloud)
+    playerCreating: null,
+    playerCreatingKind: null,
+    playKey: null, // oynatıcıya yüklenen şarkının çalma kimliği
+    endSent: false,
+    durReported: { key: null, d: 0 },
+    startTimer: null,
+    musicOff: store.get('musicOff', false), // müzik sadece bu kişide kapalı (internet harcamaz)
     analysisTrack: null,
     meterSrc: null,
     meterNode: null,
@@ -1310,6 +1312,12 @@
     return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
   }
 
+  /** Kaynak işareti: SoundCloud sadece ses, YouTube video + ses (daha çok internet) */
+  function sourceLabel(item, short) {
+    if (sourceOf(item) === 'sc') return short ? '🎧' : '🎧 SoundCloud';
+    return short ? '📺' : '📺 YouTube';
+  }
+
   const LOOP_INFO = {
     off: { icon: '🔁', title: 'Tekrar: kapalı (tıkla: liste tekrarı)', next: 'all' },
     all: { icon: '🔁', title: 'Tekrar: liste (tıkla: tek şarkı)', next: 'one' },
@@ -1324,7 +1332,7 @@
     t.textContent = item.title;
     const meta = document.createElement('span');
     meta.className = 'q-by';
-    meta.textContent = [fmtDur(item.duration), item.by].filter(Boolean).join(' · ');
+    meta.textContent = [sourceLabel(item, true), fmtDur(item.duration), item.by].filter(Boolean).join(' · ');
     const btn = document.createElement('button');
     btn.className = 'btn tiny ghost';
     btn.textContent = buttonText;
@@ -1341,12 +1349,13 @@
     lb.textContent = loop.icon;
     lb.title = loop.title;
     lb.classList.toggle('on', S.music.loop !== 'off');
-    $('#music-input').placeholder = S.music.search ? 'YouTube linki ya da şarkı adı' : 'YouTube linki yapıştır';
+    $('#music-input').placeholder = S.music.search ? 'YouTube / SoundCloud linki ya da şarkı adı' : 'YouTube / SoundCloud linki';
     $('#now-playing').hidden = !cur;
     $('#music-empty').hidden = !!cur;
     if (cur) {
       $('#np-title').textContent = cur.title;
-      $('#np-sub').textContent = [cur.author, fmtDur(cur.duration), 'ekleyen: ' + cur.by].filter(Boolean).join(' · ');
+      $('#np-sub').textContent = [sourceLabel(cur), cur.author, fmtDur(cur.duration), 'ekleyen: ' + cur.by].filter(Boolean).join(' · ');
+      $('#np-sub').title = sourceOf(cur) === 'sc' ? 'SoundCloud: sadece ses (saatte ~70 MB)' : 'YouTube: video + ses (saatte ~350 MB)';
       $('#m-pause').textContent = cur.pausedAt != null ? '▶️' : '⏸️';
       $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
     }
@@ -1371,256 +1380,409 @@
     $('#m-prev').disabled = !cur && S.music.history.length === 0;
   }
 
+  // ---------------------------------------------------------------------
+  // Oynatıcılar: YouTube (video + ses) ve SoundCloud (sadece ses, ~5 kat az internet).
+  // İkisi de aynı arayüzü sunar; senkron mantığı kaynaktan bağımsızdır.
+  //   load(cur, pos, play) play() pause() seek(sn) time() duration() state() currentId()
+  //   setVolume(0-100) setMuted(bool) destroy()
+  //   state(): 'unstarted' | 'cued' | 'buffering' | 'playing' | 'paused' | 'ended'
+  // ---------------------------------------------------------------------
+  const sourceOf = (item) => (item && item.source === 'sc' ? 'sc' : 'yt');
+
+  function loadScript(src, ready, timeoutMsg) {
+    return new Promise((resolve, reject) => {
+      if (ready()) return resolve();
+      const tag = document.createElement('script');
+      tag.src = src;
+      tag.async = true;
+      tag.onerror = () => reject(new Error(timeoutMsg));
+      document.head.appendChild(tag);
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        if (ready()) {
+          clearInterval(iv);
+          resolve();
+        } else if (Date.now() - t0 > 15000) {
+          clearInterval(iv);
+          reject(new Error(timeoutMsg));
+        }
+      }, 100);
+    });
+  }
+
   let ytApi = null;
   function loadYouTubeApi() {
     if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
-    if (ytApi) return ytApi;
-    ytApi = new Promise((resolve, reject) => {
-      const prev = window.onYouTubeIframeAPIReady;
-      window.onYouTubeIframeAPIReady = () => {
-        if (typeof prev === 'function') prev();
-        resolve(window.YT);
-      };
-      const tag = document.createElement('script');
-      tag.src = 'https://www.youtube.com/iframe_api';
-      tag.async = true;
-      tag.onerror = () => reject(new Error('YouTube yüklenemedi'));
-      document.head.appendChild(tag);
-      setTimeout(() => reject(new Error('YouTube zaman aşımı')), 15000);
-    });
-    ytApi.catch(() => (ytApi = null));
+    if (!ytApi) {
+      ytApi = loadScript('https://www.youtube.com/iframe_api', () => !!(window.YT && window.YT.Player), 'YouTube yüklenemedi').then(() => window.YT);
+      ytApi.catch(() => (ytApi = null));
+    }
     return ytApi;
   }
 
-  /** Oynatıcıyı ilk şarkıyla birlikte oluşturur (boş oluşturulan oynatıcı YouTube'da hata 2 verir). */
+  let scApi = null;
+  function loadSoundCloudApi() {
+    if (window.SC && window.SC.Widget) return Promise.resolve(window.SC);
+    if (!scApi) {
+      scApi = loadScript('https://w.soundcloud.com/player/api.js', () => !!(window.SC && window.SC.Widget), 'SoundCloud yüklenemedi').then(() => window.SC);
+      scApi.catch(() => (scApi = null));
+    }
+    return scApi;
+  }
+
+  /** YouTube oynatıcısı. İlk şarkıyla oluşturulur (boş oluşturulan oynatıcı hata 2 verir). */
+  async function createYouTubePlayer(cur, pos, play, ev) {
+    const YT = await loadYouTubeApi();
+    const box = document.createElement('div');
+    $('#player-box').replaceChildren(box);
+    $('#player-box').classList.remove('sc');
+    const names = { '-1': 'unstarted', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'cued' };
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('YouTube oynatıcı hazır olmadı')), 15000);
+      const yt = new YT.Player(box, {
+        width: '100%',
+        height: '100%',
+        videoId: cur.id,
+        playerVars: {
+          autoplay: play ? 1 : 0,
+          start: Math.max(0, Math.floor(pos)),
+          controls: 0,
+          disablekb: 1,
+          playsinline: 1,
+          rel: 0,
+          iv_load_policy: 3,
+          cc_load_policy: 0,
+          origin: location.origin,
+        },
+        events: {
+          onReady: () => {
+            clearTimeout(timer);
+            resolve(api);
+          },
+          onStateChange: (e) => ev.onState(names[e.data] || 'unstarted'),
+          onError: (e) => ev.onError(e.data),
+        },
+      });
+      const safe = (fn, d) => {
+        try {
+          return fn();
+        } catch {
+          return d;
+        }
+      };
+      const api = {
+        kind: 'yt',
+        load: (c, p, pl) =>
+          pl ? yt.loadVideoById({ videoId: c.id, startSeconds: Math.max(0, p) }) : yt.cueVideoById({ videoId: c.id, startSeconds: Math.max(0, p) }),
+        play: () => yt.playVideo(),
+        pause: () => yt.pauseVideo(),
+        seek: (s) => yt.seekTo(s, true),
+        time: () => safe(() => yt.getCurrentTime(), 0) || 0,
+        duration: () => safe(() => yt.getDuration(), 0) || 0,
+        state: () => names[safe(() => yt.getPlayerState(), -1)] || 'unstarted',
+        currentId: () => safe(() => yt.getVideoData().video_id, null),
+        setVolume: (v) => yt.setVolume(v),
+        setMuted: (m) => (m ? yt.mute() : yt.unMute()),
+        volume: () => safe(() => yt.getVolume(), null),
+        muted: () => safe(() => yt.isMuted(), null),
+        destroy: () => safe(() => yt.destroy()),
+      };
+    });
+  }
+
+  /**
+   * SoundCloud oynatıcısı (sadece ses). Widget API olay tabanlıdır; konum/durum önbellekte tutulur.
+   * Büyük plak şirketlerinin bazı parçaları gömülü oynatıcıda sadece 30 sn önizleme verir
+   * (policy SNIP); bu "oynatılamadı" olarak bildirilir.
+   */
+  async function createSoundCloudPlayer(cur, pos, play, ev) {
+    const SC = await loadSoundCloudApi();
+    const iframe = document.createElement('iframe');
+    iframe.allow = 'autoplay';
+    iframe.className = 'sc-frame';
+    iframe.title = 'SoundCloud';
+    const widgetUrl = (url, auto) =>
+      'https://w.soundcloud.com/player/?' +
+      new URLSearchParams({ url, auto_play: auto ? 'true' : 'false', visual: 'false', show_comments: 'false', show_user: 'true', hide_related: 'true', buying: 'false', sharing: 'false', download: 'false' });
+    iframe.src = widgetUrl(cur.id, false);
+    $('#player-box').replaceChildren(iframe);
+    $('#player-box').classList.add('sc');
+    const w = SC.Widget(iframe);
+    const st = { state: 'unstarted', time: 0, duration: 0, id: cur.id, volume: 100, muted: false, pendingSeek: null };
+    const applyVol = () => w.setVolume(st.muted ? 0 : st.volume);
+
+    // Yeni parça yüklenince: önizleme kontrolü, süre, başlangıç konumu
+    const afterLoad = (c, p, pl) => {
+      w.getCurrentSound((sound) => {
+        if (st.id !== c.id) return;
+        if (!sound || sound.policy === 'BLOCK') return ev.onError('sc-block');
+        if (sound.policy === 'SNIP') return ev.onError('sc-snip');
+        st.duration = (sound.full_duration || sound.duration || 0) / 1000;
+        ev.onDuration && ev.onDuration(st.duration);
+        applyVol();
+        if (p > 0.5) w.seekTo(p * 1000);
+        if (pl) w.play();
+        else st.state = 'cued';
+      });
+    };
+
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('SoundCloud oynatıcı hazır olmadı')), 15000);
+      w.bind(SC.Widget.Events.READY, () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    w.bind(SC.Widget.Events.PLAY, () => {
+      st.state = 'playing';
+      ev.onState('playing');
+    });
+    w.bind(SC.Widget.Events.PAUSE, () => {
+      if (st.state === 'ended') return;
+      st.state = 'paused';
+      ev.onState('paused');
+    });
+    w.bind(SC.Widget.Events.FINISH, () => {
+      st.state = 'ended';
+      ev.onState('ended');
+    });
+    w.bind(SC.Widget.Events.PLAY_PROGRESS, (e) => {
+      st.time = e.currentPosition / 1000;
+    });
+    w.bind(SC.Widget.Events.ERROR, () => ev.onError('sc-error'));
+    afterLoad(cur, pos, play);
+
+    return {
+      kind: 'sc',
+      load: (c, p, pl) => {
+        st.id = c.id;
+        st.state = 'buffering';
+        st.time = 0;
+        w.load(c.id, { auto_play: false, visual: false, show_comments: false, hide_related: true, callback: () => afterLoad(c, p, pl) });
+      },
+      play: () => w.play(),
+      pause: () => w.pause(),
+      seek: (s) => {
+        st.time = s;
+        w.seekTo(s * 1000);
+      },
+      time: () => st.time,
+      duration: () => st.duration,
+      state: () => st.state,
+      currentId: () => st.id,
+      setVolume: (v) => {
+        st.volume = v;
+        applyVol();
+      },
+      setMuted: (m) => {
+        st.muted = m;
+        applyVol();
+      },
+      volume: () => st.volume,
+      muted: () => st.muted,
+      destroy: () => {
+        try {
+          w.pause();
+        } catch {}
+        iframe.remove();
+      },
+    };
+  }
+
+  /** Çalan şarkının kaynağına uygun oynatıcıyı hazırlar; kaynak değiştiyse yenisini kurar. */
   function ensurePlayer(cur) {
-    if (S.yt) return Promise.resolve(S.yt);
-    if (S.ytCreating) return S.ytCreating;
-    S.ytCreating = loadYouTubeApi()
-      .then(
-        (YT) =>
-          new Promise((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error('oynatıcı hazır olmadı')), 15000);
-            const pos = musicPos(cur);
-            const playNow = cur.pausedAt == null && pos >= 0;
-            S.ytKey = cur.key;
-            S.ytEndedSent = false;
-            const player = new YT.Player('yt-player', {
-              width: '100%',
-              height: '100%',
-              videoId: cur.id,
-              playerVars: {
-                autoplay: playNow ? 1 : 0,
-                start: Math.max(0, Math.floor(pos)),
-                controls: 0,
-                disablekb: 1,
-                playsinline: 1,
-                rel: 0,
-                iv_load_policy: 3,
-                cc_load_policy: 0,
-                origin: location.origin,
-              },
-              events: {
-                onReady: () => {
-                  clearTimeout(timer);
-                  S.yt = player;
-                  applyMusicVolume();
-                  resolve(player);
-                },
-                onStateChange: onYtState,
-                onError: onYtError,
-              },
-            });
-          })
-      )
+    const kind = sourceOf(cur);
+    if (S.player && S.player.kind === kind) return Promise.resolve({ player: S.player, fresh: false });
+    if (S.playerCreating && S.playerCreatingKind === kind) return S.playerCreating;
+    if (S.player) destroyPlayer();
+    const pos = musicPos(cur);
+    const play = cur.pausedAt == null && pos >= 0;
+    S.playKey = cur.key;
+    S.endSent = false;
+    const ev = {
+      onState: (s) => onPlayerState(s),
+      onError: (code) => onPlayerError(code),
+      onDuration: () => reportDuration(),
+    };
+    S.playerCreatingKind = kind;
+    S.playerCreating = (kind === 'sc' ? createSoundCloudPlayer : createYouTubePlayer)(cur, pos, play, ev)
+      .then((player) => {
+        S.player = player;
+        applyMusicVolume();
+        return { player, fresh: true };
+      })
       .catch((err) => {
-        S.ytKey = null;
+        S.playKey = null;
         throw err;
       })
-      .finally(() => (S.ytCreating = null));
-    return S.ytCreating;
+      .finally(() => (S.playerCreating = null));
+    return S.playerCreating;
   }
 
   function destroyPlayer() {
-    clearTimeout(S.ytStartTimer);
-    if (S.yt) {
-      try {
-        S.yt.destroy();
-      } catch {}
-    }
-    S.yt = null;
-    S.ytKey = null;
-    $('#player-box').innerHTML = '<div id="yt-player"></div>';
+    clearTimeout(S.startTimer);
+    if (S.player) S.player.destroy();
+    S.player = null;
+    S.playKey = null;
+    $('#player-box').replaceChildren();
   }
 
   async function syncPlayer() {
     const cur = S.music.current;
-    clearTimeout(S.ytStartTimer);
-    if (!cur) {
-      S.ytKey = null;
-      if (S.yt) {
-        try {
-          S.yt.stopVideo();
-        } catch {}
-      }
+    clearTimeout(S.startTimer);
+    renderMusicOff();
+    if (!cur || S.musicOff) {
+      // Müzik yok ya da bu kişi müziği kendinde kapattı: oynatıcıyı tamamen kapat (hiç internet harcamaz)
+      if (S.player) destroyPlayer();
       return;
     }
     let p;
     try {
-      p = await ensurePlayer(cur);
+      ({ player: p } = await ensurePlayer(cur));
     } catch (err) {
-      console.warn('youtube', err);
-      $('#music-note').textContent = 'YouTube oynatıcısı yüklenemedi. Reklam engelleyici YouTube\'u engelliyor olabilir.';
+      console.warn('müzik oynatıcı', err);
+      $('#music-note').textContent =
+        (sourceOf(cur) === 'sc' ? 'SoundCloud' : 'YouTube') + ' oynatıcısı yüklenemedi. Reklam engelleyici engelliyor olabilir.';
       $('#music-note').hidden = false;
       return;
     }
     $('#music-note').hidden = true;
-    if (S.music.current !== cur) return; // bu arada değişti; yeni çağrı halleder
-    const YTS = window.YT.PlayerState;
+    if (S.music.current !== cur || S.musicOff || S.player !== p) return; // bu arada değişti; yeni çağrı halleder
     const pos = musicPos(cur);
 
-    if (S.ytKey !== cur.key) {
-      S.ytKey = cur.key;
-      S.ytEndedSent = false;
-      if (cur.pausedAt != null || pos < 0) p.cueVideoById({ videoId: cur.id, startSeconds: Math.max(0, pos) });
-      else p.loadVideoById({ videoId: cur.id, startSeconds: pos });
-      if (pos < 0 && cur.pausedAt == null) S.ytStartTimer = setTimeout(syncPlayer, -pos * 1000);
+    if (S.playKey !== cur.key) {
+      S.playKey = cur.key;
+      S.endSent = false;
+      const play = cur.pausedAt == null && pos >= 0;
+      p.load(cur, Math.max(0, pos), play);
+      if (pos < 0 && cur.pausedAt == null) S.startTimer = setTimeout(syncPlayer, -pos * 1000);
       return;
     }
 
-    const st = p.getPlayerState();
+    const st = p.state();
     if (cur.pausedAt != null) {
-      if (st === YTS.PLAYING || st === YTS.BUFFERING) p.pauseVideo();
-      if (Math.abs((p.getCurrentTime() || 0) - pos) > 1.5) p.seekTo(pos, true);
+      if (st === 'playing' || st === 'buffering') p.pause();
+      if (Math.abs(p.time() - pos) > 1.5) p.seek(pos);
       return;
     }
     if (pos < 0) {
-      S.ytStartTimer = setTimeout(syncPlayer, -pos * 1000);
+      S.startTimer = setTimeout(syncPlayer, -pos * 1000);
       return;
     }
     reportDuration();
     if (adLikely(cur)) return; // reklam sırasında konum düzeltmesi yapma
-    if (st === YTS.ENDED) {
+    if (st === 'ended') {
       // Güvenlik ağı: oynatıcı bitti ama sunucu hâlâ bu şarkıda (bildirim kaybolduysa
       // ya da erken sayıldıysa) — her eşitlemede (5 sn) tekrar bildir.
-      let dur = 0;
-      try {
-        dur = p.getDuration();
-      } catch {}
+      const dur = p.duration();
       if (dur > 0 && pos >= dur - 1) {
-        S.ytEndedSent = false;
-        onYtState({ data: YTS.ENDED });
+        S.endSent = false;
+        onPlayerState('ended');
       }
       return;
     }
-    if (st !== YTS.PLAYING && st !== YTS.BUFFERING) {
-      if (Math.abs((p.getCurrentTime() || 0) - pos) > 1.5) p.seekTo(pos, true);
-      p.playVideo();
-    } else if (st === YTS.PLAYING && Math.abs(p.getCurrentTime() - pos) > 2) {
+    if (st !== 'playing' && st !== 'buffering') {
+      if (Math.abs(p.time() - pos) > 1.5) p.seek(pos);
+      p.play();
+    } else if (st === 'playing' && Math.abs(p.time() - pos) > 2) {
       // Herkes aynı yerde olsun (kayma düzeltmesi)
-      p.seekTo(pos, true);
+      p.seek(pos);
     }
   }
 
-  /** Oynatıcıdaki video gerçekten çalınan şarkı mı (geçiş anlarında eski video olabilir) */
+  /** Oynatıcıdaki parça gerçekten çalınan şarkı mı (geçiş anlarında eski parça olabilir) */
   function playerOnCurrent(cur) {
-    try {
-      const vid = S.yt.getVideoData().video_id;
-      return !vid || vid === cur.id;
-    } catch {
-      return true;
-    }
+    const id = S.player && S.player.currentId();
+    return !id || id === cur.id;
   }
 
   /**
-   * Reklam oynuyor olabilir mi? Gömülü oynatıcı reklamı ayrıca bildirmez; reklam sırasında
-   * getDuration() reklamın süresini döndürür. Sunucunun bildiği (en büyük) süreden belirgin
-   * şekilde kısaysa reklam varsayılır.
+   * Reklam oynuyor olabilir mi (sadece YouTube)? Gömülü oynatıcı reklamı ayrıca bildirmez;
+   * reklam sırasında süre olarak reklamın süresi döner. Bilinen süreden belirgin kısaysa reklam varsayılır.
    */
   function adLikely(cur) {
-    if (!S.yt || !cur.duration) return false;
-    let d = 0;
-    try {
-      d = S.yt.getDuration();
-    } catch {}
+    if (!S.player || S.player.kind !== 'yt' || !cur.duration) return false;
+    const d = S.player.duration();
     return d > 0 && d < cur.duration - 3;
   }
 
   /**
-   * Gerçek video süresini sunucuya bildir (sunucu şarkının bitişini buna göre yönetir).
-   * Reklam sırasında oynatıcı reklamın süresini verebildiği için, ancak videoda 20 sn'yi
-   * geçtikten sonra bildirilir (reklamlar genelde daha kısadır).
+   * Gerçek süreyi sunucuya bildir (sunucu şarkının bitişini buna göre yönetir).
+   * YouTube'da reklam süresi karışmasın diye ancak videoda 20 sn'yi geçtikten sonra bildirilir;
+   * SoundCloud'da süre parça yüklenince kesin bilinir.
    */
   function reportDuration() {
     const cur = S.music.current;
-    if (!cur || !S.yt || S.ytKey !== cur.key || !playerOnCurrent(cur)) return;
-    let d = 0;
-    let t = 0;
-    try {
-      d = S.yt.getDuration();
-      t = S.yt.getCurrentTime();
-    } catch {}
-    if (t < 20) return;
-    if (!(d > 0) || (S.ytReported.key === cur.key && d <= S.ytReported.d + 0.5)) return;
+    const p = S.player;
+    if (!cur || !p || S.playKey !== cur.key || !playerOnCurrent(cur)) return;
+    const d = p.duration();
+    if (p.kind === 'yt' && p.time() < 20) return;
+    if (!(d > 0) || (S.durReported.key === cur.key && d <= S.durReported.d + 0.5)) return;
     if (cur.duration && d <= cur.duration + 0.5) return;
-    S.ytReported = { key: cur.key, d };
+    S.durReported = { key: cur.key, d };
     wsSend({ t: 'music-duration', key: cur.key, duration: d });
   }
 
-  function onYtState(e) {
+  function onPlayerState(state) {
     const cur = S.music.current;
-    if (!cur || S.ytKey !== cur.key) return;
-    const YTS = window.YT.PlayerState;
-    if (e.data === YTS.PLAYING) {
+    const p = S.player;
+    if (!cur || !p || S.playKey !== cur.key) return;
+    if (state === 'playing') {
       reportDuration();
       // Çalmaya başlar başlamaz herkesle aynı yere getir (yükleme süresi kadar geride kalmasın)
       if (!adLikely(cur) && cur.pausedAt == null) {
-        try {
-          const pos = musicPos(cur);
-          if (pos > 0 && Math.abs(S.yt.getCurrentTime() - pos) > 1.5) S.yt.seekTo(pos, true);
-        } catch {}
+        const pos = musicPos(cur);
+        if (pos > 0 && Math.abs(p.time() - pos) > 1.5) p.seek(pos);
       }
     }
-    if (e.data === YTS.ENDED && !S.ytEndedSent) {
-      let duration = null;
-      try {
-        duration = S.yt.getDuration();
-      } catch {}
+    if (state === 'ended' && !S.endSent) {
+      const duration = p.duration();
       const pos = musicPos(cur);
-      // Reklam bitişi, eski videonun bitişi ya da süresi dolmamış şarkı: bildirme.
+      // Reklam bitişi, eski parçanın bitişi ya da süresi dolmamış şarkı: bildirme.
       // (Sunucu şarkıyı süresi dolunca zaten kendisi geçer.)
       if (!playerOnCurrent(cur) || adLikely(cur) || (cur.duration && pos < cur.duration - 5)) {
         console.info('müzik: erken/şüpheli bitiş yok sayıldı', JSON.stringify({ id: cur.id, duration, known: cur.duration, pos }));
         return;
       }
-      S.ytEndedSent = true;
+      S.endSent = true;
       console.info('müzik bitti bildirimi', JSON.stringify({ key: cur.key, id: cur.id, duration, known: cur.duration, pos }));
       wsSend({ t: 'music-ended', key: cur.key, duration });
     }
   }
 
-  function onYtError(e) {
-    console.warn('YouTube oynatıcı hatası', e.data);
+  function onPlayerError(code) {
+    console.warn('müzik oynatıcı hatası', code);
     const cur = S.music.current;
-    if (!cur || S.ytKey !== cur.key) return;
-    // 2: geçersiz kimlik, 5: tarayıcı oynatamadı, 100: video yok/özel,
-    // 101/150/152: sahibi başka sitelerde oynatmayı kapatmış ya da yaş sınırlı.
-    // Sunucuya bildirilir; şarkı sadece odadakilerin çoğunda oynatılamıyorsa geçilir.
-    if (!S.ytEndedSent) {
-      S.ytEndedSent = true;
-      wsSend({ t: 'music-failed', key: cur.key, code: e.data });
+    if (!cur || S.playKey !== cur.key) return;
+    // YouTube: 2 geçersiz, 5 tarayıcı oynatamadı, 100 video yok, 101/150/152 gömmeye kapalı / yaş sınırı.
+    // SoundCloud: sc-snip (sadece 30 sn önizleme), sc-block, sc-error.
+    // Sunucuya bildirilir; şarkı sadece odadakilerin çoğunda oynatılamıyorsa değiştirilir/geçilir.
+    if (!S.endSent) {
+      S.endSent = true;
+      wsSend({ t: 'music-failed', key: cur.key, code });
     }
   }
 
   function applyMusicVolume() {
     $('#m-vol').value = S.musicVol;
     $('#m-vol-val').textContent = S.musicVol + '%';
-    if (!S.yt || !S.yt.setVolume) return;
+    if (!S.player) return;
     try {
-      S.yt.setVolume(S.musicVol);
-      if (S.deafened || S.musicVol === 0) S.yt.mute();
-      else S.yt.unMute();
+      S.player.setVolume(S.musicVol);
+      S.player.setMuted(S.deafened || S.musicVol === 0);
     } catch {}
+  }
+
+  /** "Müzik bende kapalı" durumunu göster */
+  function renderMusicOff() {
+    const b = $('#m-off');
+    if (!b) return;
+    b.classList.toggle('on', S.musicOff);
+    b.textContent = S.musicOff ? '🔕 Müzik sende kapalı' : '🔔 Bende kapat';
+    b.title = S.musicOff
+      ? 'Müzik sadece sende kapalı; diğerlerinde çalıyor. Tıklayınca kaldığı yerden açılır.'
+      : 'Müziği sadece kendinde kapat: hiç internet harcamaz, diğerlerinde çalmaya devam eder.';
+    $('#player-box').hidden = S.musicOff;
   }
 
   function setSideTab(name) {
@@ -2002,14 +2164,20 @@
     $('#m-prev').onclick = () => wsSend({ t: 'music-prev' });
     $('#m-loop').onclick = () => wsSend({ t: 'music-loop', mode: (LOOP_INFO[S.music.loop] || LOOP_INFO.off).next });
     $('#m-stop').onclick = () => wsSend({ t: 'music-stop' });
+    $('#m-off').onclick = () => {
+      S.musicOff = !S.musicOff;
+      store.set('musicOff', S.musicOff);
+      syncPlayer();
+    };
     $('#m-vol').oninput = (e) => {
       S.musicVol = Number(e.target.value);
       store.set('musicVol', S.musicVol);
       applyMusicVolume();
     };
     applyMusicVolume();
+    renderMusicOff();
     setInterval(() => {
-      if (S.joined && S.music.current && S.yt) syncPlayer();
+      if (S.joined && S.music.current && S.player) syncPlayer();
     }, 5000);
 
     // Ayarlar
