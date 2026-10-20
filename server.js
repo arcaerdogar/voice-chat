@@ -11,7 +11,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
-const { createYouTube, parseYouTubeId } = require('./sources');
+const { Readable } = require('stream');
+const { createYouTube, parseYouTubeId, parseSoundCloudUrl, looksLikeUrl, cleanTitle } = require('./sources');
+const { createYtDlp } = require('./ytdlp');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -76,6 +78,7 @@ const MUSIC_END_GRACE_MS = 8000;
 
 /** YouTube oynatıcı hata kodlarının açıklaması */
 function youtubeErrorText(code) {
+  if (code === 'stream-error') return 'sunucu şarkıyı akıtamadı';
   if (code === 'sc-snip') return 'SoundCloud bu parçanın sadece 30 sn önizlemesini veriyor';
   if (code === 'sc-block') return 'SoundCloud bu parçayı burada çalmıyor';
   if (code === 'sc-error') return 'SoundCloud oynatıcı hatası';
@@ -101,6 +104,18 @@ function createServer(options = {}) {
       soundcloud: options.fetchSoundCloud,
       log,
     });
+  // Ses akışı (yt-dlp): varsa YouTube şarkıları gömülü oynatıcı yerine sunucudan sadece ses
+  // olarak akar (telif/gömme engeli yok, video yok). MUSIC_STREAM=off ile kapatılabilir.
+  const ytdlp =
+    options.ytdlp !== undefined
+      ? options.ytdlp
+      : env.MUSIC_STREAM === 'off'
+        ? null
+        : createYtDlp({ bin: env.YTDLP_BIN || 'yt-dlp', cookies: env.YTDLP_COOKIES || null, log });
+  let streamOn = false;
+  const streamReady = ytdlp ? Promise.resolve(ytdlp.available()).then((ok) => (streamOn = !!ok)) : Promise.resolve(false);
+  /** Akış izni: kişiye özel anahtar → üye */
+  const streamTokens = new Map();
   const musicStartDelay = options.musicStartDelayMs ?? MUSIC_START_DELAY_MS;
   const musicEndGrace = options.musicEndGraceMs ?? MUSIC_END_GRACE_MS;
 
@@ -132,7 +147,8 @@ function createServer(options = {}) {
       current: m ? m.current : null,
       history: m ? m.history.slice(0, 15) : [],
       loop: m ? m.loop : 'off',
-      search: youtube.searchEnabled,
+      search: youtube.searchEnabled || streamOn,
+      stream: streamOn,
       serverNow: Date.now(),
     };
   }
@@ -154,6 +170,93 @@ function createServer(options = {}) {
     m.failedBy = new Set();
     m.altPending = false;
     scheduleMusicEnd(roomName);
+    // Çalan ve sıradaki şarkının ses adresini önceden hazırla (geçişte bekleme olmasın)
+    if (streamOn) {
+      for (const it of [m.current, m.queue[0]]) {
+        if (it && it.source !== 'sc') Promise.resolve(ytdlp.audioUrl(it.id)).catch(() => {});
+      }
+    }
+  }
+
+  /** Kullanıcının yazdığını şarkıya çevir: akış açıksa yt-dlp, değilse gömülü oynatıcı yolu */
+  async function resolveSong(input) {
+    if (streamOn && !parseSoundCloudUrl(input)) {
+      const id = parseYouTubeId(input);
+      if (!id && looksLikeUrl(input)) return { error: 'Sadece YouTube ve SoundCloud linkleri destekleniyor.' };
+      try {
+        const v = await ytdlp.info(id || input, !!id);
+        if (v.isLive) return { error: 'Canlı yayınlar desteklenmiyor.' };
+        Promise.resolve(ytdlp.audioUrl(v.id)).catch(() => {});
+        return { item: { source: 'yt', id: v.id, title: v.title, author: v.author, duration: v.duration } };
+      } catch (err) {
+        log('yt-dlp', err.message);
+        return { error: `Şarkı alınamadı: ${ytdlp.explain(err)}.` };
+      }
+    }
+    return youtube.resolve(input);
+  }
+
+  /** Çalınamayan şarkıya alternatif: akış açıksa aynı şarkının başka bir yüklemesi */
+  async function alternativeSong(cur) {
+    if (streamOn) {
+      try {
+        const q = (cur.source === 'sc' ? `${cur.author || ''} ${cur.title}` : cleanTitle(cur.title)).trim() + ' audio';
+        const v = await ytdlp.info(q, false);
+        return v && v.id !== cur.id && !v.isLive ? v : null;
+      } catch {
+        return null;
+      }
+    }
+    return youtube.alternativeFor(cur);
+  }
+
+  /**
+   * Ses akışı: GET /music/audio/<videoId>?k=<kişi anahtarı>
+   * Sadece odadaki kişilere ve sadece o odanın çalan/sıradaki/son çalınan şarkıları için açıktır
+   * (sunucu herkese açık bir YouTube aktarıcısına dönüşmez). Sarma (Range) desteklenir.
+   */
+  async function serveAudio(req, res, url, id) {
+    await streamReady;
+    const mem = streamTokens.get(url.searchParams.get('k') || '');
+    const room = mem && rooms.get(mem.room);
+    const m = mem && music.get(mem.room);
+    const allowed =
+      m && ((m.current && m.current.id === id) || m.queue.some((q) => q.id === id) || m.history.slice(0, 5).some((q) => q.id === id));
+    if (!streamOn || !/^[A-Za-z0-9_-]{11}$/.test(id) || !room || room.get(mem.id) !== mem || !allowed) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('izin yok');
+      return;
+    }
+    const ac = new AbortController();
+    res.on('close', () => ac.abort());
+    const upstream = (entry) => fetch(entry.url, { headers: req.headers.range ? { Range: req.headers.range } : {}, signal: ac.signal });
+    let entry = await ytdlp.audioUrl(id);
+    let up = await upstream(entry);
+    if ([403, 404, 410].includes(up.status)) {
+      // Adresin süresi dolmuş ya da geçersiz: yenisini al
+      entry = await ytdlp.audioUrl(id, { fresh: true });
+      up = await upstream(entry);
+    }
+    if (!up.ok) {
+      res.writeHead(up.status === 416 ? 416 : 502);
+      res.end();
+      return;
+    }
+    const headers = { 'Content-Type': entry.mime, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' };
+    for (const k of ['content-length', 'content-range']) {
+      const v = up.headers.get(k);
+      if (v) headers[k] = v;
+    }
+    res.writeHead(up.status, headers);
+    if (req.method === 'HEAD' || !up.body) {
+      ac.abort();
+      res.end();
+      return;
+    }
+    Readable.fromWeb(up.body)
+      .on('data', (chunk) => (mem.audioBytes = (mem.audioBytes || 0) + chunk.length))
+      .on('error', () => res.destroy())
+      .pipe(res);
   }
 
   /**
@@ -251,6 +354,15 @@ function createServer(options = {}) {
     const url = new URL(req.url, 'http://x');
     let pathname = decodeURIComponent(url.pathname);
 
+    if (pathname.startsWith('/music/audio/')) {
+      serveAudio(req, res, url, pathname.slice('/music/audio/'.length)).catch((err) => {
+        log('audio', err.message);
+        if (!res.headersSent) res.writeHead(502);
+        res.end();
+      });
+      return;
+    }
+
     if (pathname === '/healthz') {
       let members = 0;
       for (const r of rooms.values()) members += r.size;
@@ -323,6 +435,7 @@ function createServer(options = {}) {
     const m = room.get(id);
     if (!m) return;
     clearTimeout(m.graceTimer);
+    streamTokens.delete(m.streamToken);
     room.delete(id);
     if (room.size === 0) {
       rooms.delete(roomName);
@@ -427,7 +540,9 @@ function createServer(options = {}) {
               online: true,
               ws,
               graceTimer: null,
+              streamToken: crypto.randomBytes(16).toString('hex'),
             };
+            streamTokens.set(member.streamToken, member);
             room.set(id, member);
             broadcast(roomName, { t: 'peer-joined', peer: publicMember(member) }, id);
             log(`join room=${roomName} id=${id} size=${room.size}`);
@@ -435,7 +550,15 @@ function createServer(options = {}) {
 
           const peers = [];
           for (const m of room.values()) if (m.id !== id) peers.push(publicMember(m));
-          send(ws, { t: 'welcome', id, room: roomName, peers, iceServers: buildIceServers(env), music: musicSnapshot(roomName) });
+          send(ws, {
+            t: 'welcome',
+            id,
+            room: roomName,
+            peers,
+            iceServers: buildIceServers(env),
+            music: musicSnapshot(roomName),
+            streamToken: member.streamToken,
+          });
           return;
         }
 
@@ -484,7 +607,7 @@ function createServer(options = {}) {
             return;
           }
           const adder = member;
-          Promise.resolve(youtube.resolve(input))
+          Promise.resolve(resolveSong(input))
             .then((res) => {
               // Bu sırada kişi ayrılmış veya oda kapanmış olabilir
               const room = rooms.get(adder.room);
@@ -613,7 +736,7 @@ function createServer(options = {}) {
               // Ancak odadakilerin yarısından fazlası oynatamıyorsa geçilir.
               if (!m.failedBy) m.failedBy = new Set();
               m.failedBy.add(member.id);
-              const code = typeof msg.code === 'number' || ['sc-snip', 'sc-block', 'sc-error'].includes(msg.code) ? msg.code : null;
+              const code = typeof msg.code === 'number' || ['sc-snip', 'sc-block', 'sc-error', 'stream-error'].includes(msg.code) ? msg.code : null;
               const reason = youtubeErrorText(code);
               if (m.failedBy.size * 2 <= onlineCount(member.room)) {
                 send(ws, { t: 'music-error', message: `Bu video sende oynatılamıyor: ${reason}. Diğerlerinde çalmaya devam ediyor.` });
@@ -623,7 +746,7 @@ function createServer(options = {}) {
               if (m.altPending) return;
               m.altPending = true;
               const roomName = member.room;
-              Promise.resolve(youtube.alternativeFor(cur))
+              Promise.resolve(alternativeSong(cur))
                 .then((alt) => {
                   const mm = music.get(roomName);
                   if (!mm || mm.current !== cur) return; // bu arada değişti
@@ -698,7 +821,11 @@ function createServer(options = {}) {
     });
   }
 
-  return { server, wss, rooms, close, musicForTest: (room) => music.get(room) };
+  streamReady.then(() => {
+    if (streamOn) for (const roomName of music.keys()) broadcastMusic(roomName, null);
+  });
+
+  return { server, wss, rooms, close, musicForTest: (room) => music.get(room), streamReady };
 }
 
 module.exports = { createServer, buildIceServers, normalizeRoom, cleanName, parseYouTubeId };
@@ -707,6 +834,10 @@ if (require.main === module) {
   const port = Number(process.env.PORT) || 3000;
   const { server, close } = createServer();
   server.listen(port, () => console.log(`RiftVoice http://localhost:${port}`));
+  // Docker imajında yt-dlp kendi kendini günceller (bkz. Dockerfile)
+  if (process.env.YTDLP_PIP && process.env.MUSIC_STREAM !== 'off') {
+    require('./ytdlp').startAutoUpdate({ pip: process.env.YTDLP_PIP, log: (...a) => console.log(new Date().toISOString(), ...a) });
+  }
 
   // Beklenmeyen hatalar süreci düşürmesin; logla ve devam et.
   process.on('uncaughtException', (err) => console.error('uncaughtException', err));

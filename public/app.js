@@ -596,6 +596,7 @@
       if (p.audio && p.audio.setSinkId) p.audio.setSinkId(S.outId || '').catch(() => {});
     }
     if (S.ctx && S.ctx.setSinkId) S.ctx.setSinkId(S.outId || '').catch(() => {});
+    if (S.player && S.player.setSink) S.player.setSink(S.outId);
   }
 
   // =====================================================================
@@ -774,6 +775,7 @@
       }
     }
     if (first && S.peers.size === 0) chatAppend('', 'Odada şu an kimse yok. Linki arkadaşlarına gönder!', 0, true);
+    if (m.streamToken) S.streamToken = m.streamToken;
     if (m.music) onMusic(m.music);
   }
 
@@ -1297,6 +1299,7 @@
       history: Array.isArray(m.history) ? m.history : [],
       loop: m.loop || 'off',
       search: !!m.search,
+      stream: !!m.stream,
     };
     if (m.event) chatAppend('', m.event, 0, true);
     renderMusic();
@@ -1315,6 +1318,7 @@
   /** Kaynak işareti: SoundCloud sadece ses, YouTube video + ses (daha çok internet) */
   function sourceLabel(item, short) {
     if (sourceOf(item) === 'sc') return short ? '🎧' : '🎧 SoundCloud';
+    if (S.music.stream) return short ? '🎧' : '🎧 YouTube (sadece ses)';
     return short ? '📺' : '📺 YouTube';
   }
 
@@ -1355,7 +1359,12 @@
     if (cur) {
       $('#np-title').textContent = cur.title;
       $('#np-sub').textContent = [sourceLabel(cur), cur.author, fmtDur(cur.duration), 'ekleyen: ' + cur.by].filter(Boolean).join(' · ');
-      $('#np-sub').title = sourceOf(cur) === 'sc' ? 'SoundCloud: sadece ses (saatte ~70 MB)' : 'YouTube: video + ses (saatte ~350 MB)';
+      $('#np-sub').title =
+        sourceOf(cur) === 'sc'
+          ? 'SoundCloud: sadece ses (saatte ~70 MB)'
+          : S.music.stream
+            ? 'YouTube, sunucudan sadece ses olarak (saatte ~60 MB)'
+            : 'YouTube: video + ses (saatte ~350 MB)';
       $('#m-pause').textContent = cur.pausedAt != null ? '▶️' : '⏸️';
       $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
     }
@@ -1388,6 +1397,98 @@
   //   state(): 'unstarted' | 'cued' | 'buffering' | 'playing' | 'paused' | 'ended'
   // ---------------------------------------------------------------------
   const sourceOf = (item) => (item && item.source === 'sc' ? 'sc' : 'yt');
+  /** Hangi oynatıcı: SoundCloud widget'ı, sunucu ses akışı (yt-dlp) ya da gömülü YouTube */
+  const playerKindFor = (item) => (sourceOf(item) === 'sc' ? 'sc' : S.music.stream ? 'stream' : 'yt');
+
+  /**
+   * Sunucu ses akışı oynatıcısı (sadece ses). YouTube şarkıları sunucudan /music/audio ile gelir:
+   * gömme/telif engeli yok, video yok, reklam yok.
+   */
+  async function createStreamPlayer(cur, pos, play, ev) {
+    const el = document.createElement('audio');
+    el.preload = 'auto';
+    if (S.outId && el.setSinkId) el.setSinkId(S.outId).catch(() => {});
+    const ui = document.createElement('div');
+    ui.className = 'stream-ui';
+    ui.innerHTML = '<div class="stream-bar"><div class="stream-fill"></div></div><div class="stream-times"><span class="st-now">0:00</span><span class="st-mode">🎧 sadece ses</span><span class="st-dur"></span></div>';
+    const box = $('#player-box');
+    box.replaceChildren(el, ui);
+    box.classList.remove('sc');
+    box.classList.add('stream');
+    let state = 'unstarted';
+    let id = null;
+    const srcFor = (c) => `/music/audio/${encodeURIComponent(c.id)}?k=${encodeURIComponent(S.streamToken || '')}`;
+    el.addEventListener('playing', () => {
+      state = 'playing';
+      ev.onState('playing');
+    });
+    el.addEventListener('pause', () => {
+      if (state === 'ended') return;
+      state = 'paused';
+      ev.onState('paused');
+    });
+    el.addEventListener('waiting', () => (state = 'buffering'));
+    el.addEventListener('ended', () => {
+      state = 'ended';
+      ev.onState('ended');
+    });
+    el.addEventListener('error', () => {
+      if (el.getAttribute('src')) ev.onError('stream-error');
+    });
+    el.addEventListener('loadedmetadata', () => ev.onDuration && ev.onDuration());
+    const fmt = (x) => (x > 0 ? fmtDur(x) : '0:00');
+    const tick = setInterval(() => {
+      const d = isFinite(el.duration) && el.duration > 0 ? el.duration : (S.music.current && S.music.current.duration) || 0;
+      ui.querySelector('.stream-fill').style.width = d ? Math.min(100, (el.currentTime / d) * 100) + '%' : '0';
+      ui.querySelector('.st-now').textContent = fmt(el.currentTime);
+      ui.querySelector('.st-dur').textContent = d ? fmtDur(d) : '';
+    }, 500);
+    const load = (c, p, pl) => {
+      id = c.id;
+      state = pl ? 'buffering' : 'cued';
+      el.src = srcFor(c);
+      try {
+        el.currentTime = Math.max(0, p);
+      } catch {}
+      if (pl)
+        el.play().catch((err) => {
+          if (err && err.name === 'NotAllowedError') showAudioUnlock();
+        });
+    };
+    load(cur, pos, play);
+    return {
+      kind: 'stream',
+      load,
+      play: () =>
+        el.play().catch((err) => {
+          if (err && err.name === 'NotAllowedError') showAudioUnlock();
+        }),
+      pause: () => el.pause(),
+      seek: (t) => {
+        try {
+          el.currentTime = t;
+        } catch {}
+      },
+      time: () => el.currentTime || 0,
+      duration: () => (isFinite(el.duration) ? el.duration : 0),
+      state: () => state,
+      currentId: () => id,
+      setVolume: (v) => (el.volume = Math.max(0, Math.min(1, v / 100))),
+      setMuted: (m) => (el.muted = m),
+      volume: () => Math.round(el.volume * 100),
+      muted: () => el.muted,
+      setSink: (sink) => el.setSinkId && el.setSinkId(sink || '').catch(() => {}),
+      destroy: () => {
+        clearInterval(tick);
+        el.pause();
+        el.removeAttribute('src');
+        el.load(); // indirmeyi gerçekten durdur
+        box.classList.remove('stream');
+        el.remove();
+        ui.remove();
+      },
+    };
+  }
 
   function loadScript(src, ready, timeoutMsg) {
     return new Promise((resolve, reject) => {
@@ -1435,7 +1536,7 @@
     const YT = await loadYouTubeApi();
     const box = document.createElement('div');
     $('#player-box').replaceChildren(box);
-    $('#player-box').classList.remove('sc');
+    $('#player-box').classList.remove('sc', 'stream');
     const names = { '-1': 'unstarted', 0: 'ended', 1: 'playing', 2: 'paused', 3: 'buffering', 5: 'cued' };
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('YouTube oynatıcı hazır olmadı')), 15000);
@@ -1591,7 +1692,7 @@
 
   /** Çalan şarkının kaynağına uygun oynatıcıyı hazırlar; kaynak değiştiyse yenisini kurar. */
   function ensurePlayer(cur) {
-    const kind = sourceOf(cur);
+    const kind = playerKindFor(cur);
     if (S.player && S.player.kind === kind) return Promise.resolve({ player: S.player, fresh: false });
     if (S.playerCreating && S.playerCreatingKind === kind) return S.playerCreating;
     if (S.player) destroyPlayer();
@@ -1605,7 +1706,7 @@
       onDuration: () => reportDuration(),
     };
     S.playerCreatingKind = kind;
-    S.playerCreating = (kind === 'sc' ? createSoundCloudPlayer : createYouTubePlayer)(cur, pos, play, ev)
+    S.playerCreating = ({ sc: createSoundCloudPlayer, stream: createStreamPlayer, yt: createYouTubePlayer }[kind])(cur, pos, play, ev)
       .then((player) => {
         S.player = player;
         applyMusicVolume();
@@ -1642,7 +1743,9 @@
     } catch (err) {
       console.warn('müzik oynatıcı', err);
       $('#music-note').textContent =
-        (sourceOf(cur) === 'sc' ? 'SoundCloud' : 'YouTube') + ' oynatıcısı yüklenemedi. Reklam engelleyici engelliyor olabilir.';
+        playerKindFor(cur) === 'stream'
+          ? 'Müzik akışı başlatılamadı.'
+          : (sourceOf(cur) === 'sc' ? 'SoundCloud' : 'YouTube') + ' oynatıcısı yüklenemedi. Reklam engelleyici engelliyor olabilir.';
       $('#music-note').hidden = false;
       return;
     }

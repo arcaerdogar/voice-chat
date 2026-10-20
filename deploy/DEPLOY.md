@@ -88,10 +88,28 @@ Not: Müzik botu, eklenen videonun başlığını almak için sunucudan `https:/
 istek atar. Sunucunun dışarıya HTTPS çıkışı kapalıysa müzik yine çalışır, sadece başlık yerine
 "YouTube videosu (kimlik)" yazar.
 
-## Müzik: YouTube API anahtarı (isteğe bağlı, önerilir)
+## Müzik: YouTube "bot değilim" engeli (gerekirse)
 
-Anahtarla: şarkı adıyla arama ve telif/yaş sınırı yüzünden çalınamayan videolar için otomatik olarak
-çalınabilen versiyonu bulma açılır. Anahtarsız da müzik botu linklerle çalışır. Ücretsizdir.
+Müzik botu Docker imajındaki yt-dlp ile çalışır; ek ayar gerekmez. YouTube bazen sunucu IP'lerine
+"bot olmadığını doğrula" engeli koyar. Olursa sohbette **"YouTube sunucuyu bot sandı"** yazar. Çözüm:
+
+1. Chrome'a **"Get cookies.txt LOCALLY"** eklentisini kurun. (Ana hesabınız yerine ayrı, boş bir Google hesabı önerilir.)
+2. youtube.com'a o hesapla girin, eklentiyle **youtube.com** çerezlerini dışa aktarın (Netscape formatı).
+3. Dosyayı sunucuya kopyalayın:
+```bash
+sudo mkdir -p /opt/voice-chat/data
+sudo cp youtube-cookies.txt /opt/voice-chat/data/youtube-cookies.txt
+sudo chmod 644 /opt/voice-chat/data/youtube-cookies.txt
+cd /opt/voice-chat && sudo docker compose up -d --force-recreate riftvoice
+```
+`sudo docker logs riftvoice` çıktısında "çerez dosyası kullanılıyor" görünmeli. Çerezler zamanla geçersizleşirse aynı adımlarla yenileyin.
+
+Müzik akışını tamamen kapatmak (resmi gömülü YouTube oynatıcısına dönmek) için `.env`'e `MUSIC_STREAM=off` ekleyin.
+
+## Müzik: YouTube API anahtarı (isteğe bağlı)
+
+Müzik akışı (yt-dlp) açıkken gerekmez: arama ve çalma onunla yapılır. Sadece `MUSIC_STREAM=off` kullanıyorsanız
+şarkı adıyla arama ve gömülemeyen videolara alternatif bulma için işe yarar. Ücretsizdir.
 
 1. https://console.cloud.google.com adresine Google hesabınla gir, üstten **yeni proje** oluştur (ör. `riftvoice`).
 2. **APIs & Services → Library** → "YouTube Data API v3" → **Enable**.

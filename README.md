@@ -58,20 +58,25 @@ Sınırlar:
 
 ## Müzik botu nasıl çalışır?
 
-Ses sunucudan yayınlanmaz. Sunucu sadece ortak sırayı ve "şu şarkı şu saniyede başladı" bilgisini tutar;
-herkesin tarayıcısı resmi YouTube oynatıcısıyla aynı videoyu aynı konumda çalar (±2 sn içinde senkron).
-Böylece sunucuya yük binmez, müzik mikrofondan gönderilmez ve herkes müzik sesini kendisi ayarlar.
+Arkadaşlar arası özel kullanım içindir. Sunucu ortak sırayı ve "şu şarkı şu saniyede başladı" bilgisini tutar;
+herkes aynı şarkıyı aynı konumda duyar (testlerde ±0.1–2 sn).
 
-- YouTube (`youtube.com/watch`, `youtu.be`, `music.youtube.com`, `shorts`) ve SoundCloud parça linkleri desteklenir. Sunucuda `YOUTUBE_API_KEY` varsa şarkı adıyla da eklenebilir.
-- **İnternet kullanımı:** YouTube'un resmi oynatıcısı sadece ses çalamaz ve kaliteyi düşürmeye izin vermez; ölçümlerde boyuttan bağımsız 480p, kişi başı **saatte ~350–450 MB**.
-  SoundCloud sadece ses çalar: **saatte ~70 MB**. İnterneti kısıtlı olan kişi **🔔 Bende kapat** ile müziği sadece kendinde kapatabilir (hiç veri harcamaz, diğerlerinde çalar).
-- SoundCloud'da büyük plak şirketlerinin bazı parçaları gömülü oynatıcıda sadece 30 sn önizleme verir; uygulama bunu algılar, API anahtarı varsa YouTube versiyonuna geçer, yoksa açıklamayla atlar.
-- **Telifli / çalınamayan videolar:** Bazı videolar (çoğunlukla plak şirketlerinin resmi klipleri) YouTube dışında oynatılamaz, yaş sınırlı ya da Türkiye'de engelli olabilir.
-  API anahtarı varsa uygulama bunu eklerken (ya da çalarken) fark eder ve aynı şarkının çalınabilen bir versiyonunu (Topic kanalı, lyrics, audio) otomatik bulup onu çalar.
-  Ses hiçbir zaman YouTube'dan indirilip yeniden yayınlanmaz; her zaman YouTube'un resmi oynatıcısı kullanılır.
-- Bir video sadece bir kişide oynatılamıyorsa diğerlerinde çalmaya devam eder; ancak çoğunlukta oynatılamazsa alternatife geçilir ya da atlanır.
-- Şarkının bitişini sunucu yönetir; reklam bitişi gibi hatalı "bitti" sinyalleri şarkıyı kesmez.
-- Kulaklık (sağırlaştırma) müziği de susturur. YouTube'u engelleyen reklam engelleyiciler oynatıcıyı durdurabilir.
+**Varsayılan: sunucudan sadece ses (yt-dlp).** Docker imajında yt-dlp kuruludur. YouTube şarkılarının ses akışını
+sunucu alır ve odadakilere iletir:
+- Telif / "başka sitelerde oynatılamaz" engeli yok (gömülü oynatıcı kullanılmaz), reklam yok.
+- Video yok: Opus ses ~130 kbit/sn, şarkı başına ~5 MB, **saatte ~60 MB** (gömülü YouTube oynatıcısında 350–450 MB).
+- Şarkı adıyla arama API anahtarı olmadan çalışır.
+- Akış sadece odadaki kişilere ve sadece o odanın sırasındaki şarkılar için açıktır.
+- yt-dlp sunucu açılışında ve her gün kendini günceller. YouTube sunucuyu "bot" sanarsa çerez eklenir (bkz. DEPLOY.md).
+- `MUSIC_STREAM=off` ile kapatılırsa (ya da yt-dlp yoksa) resmi gömülü YouTube oynatıcısına dönülür.
+
+Diğer ayrıntılar:
+- YouTube (`youtube.com/watch`, `youtu.be`, `music.youtube.com`, `shorts`) ve SoundCloud parça linkleri ya da şarkı adı.
+- SoundCloud resmi oynatıcısıyla çalar (sadece ses, ~70 MB/saat); bazı plak şirketi parçaları orada sadece 30 sn önizleme verir,
+  uygulama bunu algılayıp YouTube versiyonuna geçer.
+- **🔔 Bende kapat:** müziği sadece kendinde kapatır, hiç veri harcamaz; diğerlerinde çalmaya devam eder.
+- Bir şarkı sadece bir kişide çalınamıyorsa diğerlerinde devam eder; çoğunlukta çalınamazsa başka bir yüklemesi denenir ya da atlanır.
+- Şarkının bitişini sunucu yönetir. Kulaklık (sağırlaştırma) müziği de susturur.
 - Sunucu yeniden başlarsa sıra sıfırlanır (sesli sohbet etkilenmez).
 
 ## Yerelde çalıştırma
@@ -135,7 +140,8 @@ npm run test:server   # sunucu protokol testleri
 npm run test:e2e      # gerçek Chrome/Edge ile uçtan uca testler (sahte mikrofon)
 npm run test:turn     # gerçek coturn (Docker) ile röle testi
 npm run test:noise    # yapay zekâ gürültü engelleme ölçümü
-npm run test:music    # gerçek YouTube oynatıcısıyla müzik testi (YouTube erişilemezse atlanır)
+npm run test:music    # gerçek YouTube/SoundCloud oynatıcısıyla müzik testi (erişilemezse atlanır)
+npm run test:stream   # yt-dlp ses akışı testi (YTDLP_BIN ya da PATH'te yt-dlp gerekir, yoksa atlanır)
 npm test              # hepsi (Docker yoksa TURN testi atlanır)
 ```
 

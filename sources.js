@@ -294,4 +294,4 @@ function createYouTube(opts = {}) {
   return { searchEnabled: !!apiKey, resolve, alternativeFor };
 }
 
-module.exports = { createYouTube, parseYouTubeId, parseSoundCloudUrl, parseIsoDuration, cleanTitle, fetchOEmbed, fetchSoundCloud };
+module.exports = { createYouTube, parseYouTubeId, parseSoundCloudUrl, looksLikeUrl, parseIsoDuration, cleanTitle, fetchOEmbed, fetchSoundCloud };
