@@ -14,7 +14,8 @@
     "test:noise": "node --test test/noise.test.js",
     "test:sources": "node --test test/sources.test.js",
     "test:stream": "node --test test/stream.test.js",
-    "test:screen": "node --test test/screen.test.js"
+    "test:screen": "node --test test/screen.test.js",
+    "test:camera": "node --test test/camera.test.js"
   },
   "engines": {
     "node": ">=18"

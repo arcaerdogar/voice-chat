@@ -125,7 +125,7 @@ test('Ekran paylaşımı: sadece izleyene gider, ses kesilmez, yeniden bağlanı
   // Arca paylaşır
   await A.click('#share-btn');
   await A.waitForFunction(() => !!window.__rv.screen);
-  assert.match(await A.textContent('#share-btn'), /Paylaşımı durdur/);
+  assert.match(await A.textContent('#share-btn'), /Durdur/);
   for (const p of [B, C]) {
     await p.waitForSelector('.screen-tile .watch-btn', { state: 'visible', timeout: 10000 });
     assert.match(await p.textContent('.screen-tile .screen-msg'), /Arca ekranını paylaşıyor/);

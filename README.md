@@ -22,6 +22,7 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
 - **Yapay zekâ gürültü engelleme (RNNoise)**: hoparlörden mikrofona giren oyun efektleri, klavye, fan sesi silinir; konuşma korunur
 - **Otomatik ses eşiği**: konuşmadığın anlarda mikrofon tamamen susar (RNNoise'un konuşma algılamasıyla). Sekme arka plandayken de çalışır (AudioWorklet)
 - **Müzik botu**: YouTube / SoundCloud linki ya da (API anahtarıyla) şarkı adı ekle, odadaki herkeste aynı anda çalar. Ortak sıra, önceki şarkı, liste/tek şarkı tekrarı, son çalınanlar, duraklat/geç/durdur, kişisel müzik sesi; sohbette `/play`, `/skip`, `/prev`, `/loop`, `/stop`, `/pause`, `/resume`
+- **Kamera**: kişinin kutusunda avatar yerine görüntüsü (640×360, 24 fps, kişi başı en fazla ~500 kbit/sn). Telefonda da çalışır; ayarlardan kamera seçilir.
 - **Ekran paylaşımı** (Discord'daki "Yayın" gibi): ekran, pencere ya da sekme, sesiyle birlikte (Chrome/Edge). İzlemek isteğe bağlıdır;
   görüntü sadece "Yayını izle" diyenlere gider (herkes birbirine doğrudan bağlı olduğu için paylaşanın internetini korur, izleyen başına ~1–2.5 Mbit/sn).
   1080p'ye kadar, 30 fps; tam ekran ve yayın sesi ayarı. Telefon tarayıcıları ekran paylaşamaz ama izleyebilir.
@@ -144,6 +145,7 @@ npm run test:e2e      # gerçek Chrome/Edge ile uçtan uca testler (sahte mikrof
 npm run test:turn     # gerçek coturn (Docker) ile röle testi
 npm run test:noise    # yapay zekâ gürültü engelleme ölçümü
 npm run test:music    # gerçek YouTube/SoundCloud oynatıcısıyla müzik testi (erişilemezse atlanır)
+npm run test:camera   # kamera testi (üç Chrome, sahte kamera)
 npm run test:screen   # ekran paylaşımı testi (üç Chrome)
 npm run test:stream   # yt-dlp ses akışı testi (YTDLP_BIN ya da PATH'te yt-dlp gerekir, yoksa atlanır)
 npm test              # hepsi (Docker yoksa TURN testi atlanır)

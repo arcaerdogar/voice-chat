@@ -109,6 +109,8 @@
     peers: new Map(),
     selfEl: null,
     screen: null, // kendi ekran paylaşımım: { stream, video, audio }
+    cam: null, // kendi kameram: { stream, track }
+    camId: store.get('camId', ''),
     transmitting: false,
     unread: 0,
   };
@@ -316,6 +318,7 @@
     lm.classList.toggle('on', p.localMuted);
     lm.innerHTML = svgIcon(p.localMuted ? 'speaker-off' : 'speaker');
     renderSide(p.el, { name: p.name, muted: p.muted, deafened: p.deafened, offline: !p.online, sharing: p.sharing });
+    refreshCam(p);
   }
 
   // =====================================================================
@@ -638,6 +641,7 @@
       sel.value = [...sel.options].some((o) => o.value === current) ? current : '';
     };
     fill($('#mic-select'), mics, S.micId, 'Sistem varsayılanı');
+    fill($('#cam-select'), devices.filter((d) => d.kind === 'videoinput'), S.camId, 'Varsayılan kamera');
     fill($('#join-mic'), mics, S.micId, 'Sistem varsayılanı');
     const canSink = 'setSinkId' in HTMLMediaElement.prototype;
     $('#out-select').hidden = !canSink;
@@ -686,7 +690,7 @@
     ws.onopen = () => {
       clearTimeout(openTimeout);
       if (S.ws !== ws) return;
-      wsSend({ t: 'join', room: S.room, id: S.id, name: S.name, muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen });
+      wsSend({ t: 'join', room: S.room, id: S.id, name: S.name, muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen, camera: !!S.cam });
       startPing();
     };
     ws.onmessage = (e) => {
@@ -860,6 +864,7 @@
     p.online = !!m.online;
     const wasSharing = p.sharing;
     p.sharing = !!m.sharing;
+    p.camera = !!m.camera;
     if (p.online) p.absentSince = 0;
     if (wasSharing && !p.sharing) p.iWatch = false;
     if (p.sharing && !wasSharing) chatAppend('', `${p.name} ekranını paylaşmaya başladı`, 0, true);
@@ -904,6 +909,7 @@
         rtt: null,
         relay: false,
         sharing: !!info.sharing,
+        camera: !!info.camera,
         watching: false, // bu kişi benim yayınımı izliyor
         iWatch: false, // ben bu kişinin yayınını izliyorum
         el: null,
@@ -940,8 +946,10 @@
       p.deafened = !!info.deafened;
       p.online = info.online !== false;
       p.sharing = !!info.sharing;
+      p.camera = !!info.camera;
       if (!p.sharing) p.iWatch = false;
     }
+    refreshCam(p);
     renderScreens();
     if (p.online) p.absentSince = 0;
     renderPeer(p);
@@ -1036,6 +1044,10 @@
     };
     pc.ontrack = (e) => {
       if (p.pc !== pc) return;
+      if (e.transceiver && e.transceiver === camTx(pc)) {
+        setTimeout(() => refreshCam(p), 0);
+        return;
+      }
       if (e.transceiver && e.transceiver !== micTx(pc)) {
         // Ekran paylaşımı izi: izliyorsam görüntüyü yeni bağlantının izleriyle tazele
         if (p.iWatch) setTimeout(() => refreshScreenVideo(p), 0);
@@ -1051,6 +1063,8 @@
         p.badSince = 0;
         tuneSenders(pc);
         applyScreenSend(p);
+        applyCamSend(p);
+        refreshCam(p);
         // Bağlantı yeniden kurulduysa izleme isteğini tekrarla
         if (p.iWatch) {
           sendSignal(p, { watch: true }, p.sid);
@@ -1077,13 +1091,16 @@
     // Paylaşım başlayınca sadece içlerine iz konur (replaceTrack); yeniden müzakere gerekmez.
     pc.addTransceiver('video', { direction: 'sendrecv' });
     pc.addTransceiver('audio', { direction: 'sendrecv' });
+    // Kamera kanalı (boş durur; kamera açılınca içine iz konur)
+    pc.addTransceiver('video', { direction: 'sendrecv' });
     applyScreenSend(p);
+    applyCamSend(p);
     renderPeer(p);
     // negotiationneeded olayı teklifi gönderecek.
   }
 
   /**
-   * Kanal sırası her iki tarafta aynıdır: [0] mikrofon, [1] ekran görüntüsü, [2] ekran sesi.
+   * Kanal sırası her iki tarafta aynıdır: [0] mikrofon, [1] ekran görüntüsü, [2] ekran sesi, [3] kamera.
    * (Başlatan taraf bu sırayla ekler; karşı taraf teklifteki sırayla alır.)
    */
   function micTx(pc) {
@@ -1092,6 +1109,31 @@
   function screenTx(pc) {
     const t = pc.getTransceivers();
     return { video: t[1] && t[1].receiver.track.kind === 'video' ? t[1] : null, audio: t[2] && t[2].receiver.track.kind === 'audio' ? t[2] : null };
+  }
+
+  function camTx(pc) {
+    const t = pc.getTransceivers()[3];
+    return t && t.receiver.track.kind === 'video' ? t : null;
+  }
+
+  /** Kamera görüntüsünü gönder (açıksa herkese; düşük çözünürlük, ~500 kbit/sn) */
+  function applyCamSend(p) {
+    if (!p.pc) return;
+    const tx = camTx(p.pc);
+    if (!tx || tx.stopped) return;
+    const want = S.cam ? S.cam.track : null;
+    if (tx.sender.track !== want) tx.sender.replaceTrack(want).catch(() => {});
+    try {
+      const prm = tx.sender.getParameters();
+      if (prm.encodings && prm.encodings.length) {
+        prm.encodings[0].active = !!want;
+        if (want) {
+          prm.encodings[0].maxBitrate = 500000;
+          prm.encodings[0].maxFramerate = 24;
+        }
+        tx.sender.setParameters(prm).catch(() => {});
+      }
+    } catch {}
   }
 
   function attachLocalTrack(p) {
@@ -1106,6 +1148,7 @@
       if (!t.stopped && t.direction !== 'sendrecv') t.direction = 'sendrecv';
     }
     applyScreenSend(p);
+    applyCamSend(p);
   }
 
   /**
@@ -1379,6 +1422,96 @@
   // Kontroller
   // =====================================================================
   // =====================================================================
+  // Kamera
+  // =====================================================================
+  const canCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+  function camErrorText(err) {
+    if (!err) return 'Kamera açılamadı.';
+    if (err.name === 'NotAllowedError' || err.name === 'SecurityError') return 'Kamera izni verilmedi. Adres çubuğundaki kamera simgesinden izin verin.';
+    if (err.name === 'NotFoundError' || err.name === 'OverconstrainedError') return 'Kamera bulunamadı.';
+    if (err.name === 'NotReadableError') return 'Kamera başka bir uygulama tarafından kullanılıyor olabilir.';
+    return 'Kamera açılamadı: ' + (err.message || err.name);
+  }
+
+  async function startCam() {
+    if (S.cam || S.camStarting) return;
+    S.camStarting = true;
+    const video = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24, max: 30 } };
+    if (S.camId) video.deviceId = { exact: S.camId };
+    let stream = null;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video });
+    } catch (err) {
+      if (S.camId && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError')) {
+        // Kayıtlı kamera artık yok: varsayılana dön
+        S.camId = '';
+        store.set('camId', '');
+        delete video.deviceId;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video });
+        } catch (err2) {
+          toast(camErrorText(err2), 4000);
+        }
+      } else toast(camErrorText(err), 4000);
+    }
+    S.camStarting = false;
+    if (!stream) return;
+    if (!S.joined) return stream.getTracks().forEach((t) => t.stop());
+    const track = stream.getVideoTracks()[0];
+    track.addEventListener('ended', stopCam);
+    S.cam = { stream, track };
+    for (const p of S.peers.values()) applyCamSend(p);
+    publishState();
+    renderSelfCam();
+    refreshDevices();
+  }
+
+  function stopCam() {
+    if (!S.cam) return;
+    S.cam.stream.getTracks().forEach((t) => t.stop());
+    S.cam = null;
+    for (const p of S.peers.values()) applyCamSend(p);
+    publishState();
+    renderSelfCam();
+  }
+
+  /** Bir kişinin kamera görüntüsünü kutusuna bağla (kamerası açıksa) */
+  function refreshCam(p) {
+    if (!p.el) return;
+    const video = p.el.querySelector('.cam-video');
+    const tx = p.pc && camTx(p.pc);
+    const on = !!(p.camera && tx);
+    p.el.classList.toggle('has-cam', on);
+    if (!on) {
+      if (video.srcObject) video.srcObject = null;
+      return;
+    }
+    const track = tx.receiver.track;
+    if (!video.srcObject || video.srcObject.getVideoTracks()[0] !== track) video.srcObject = new MediaStream([track]);
+    video.play().catch(() => {});
+  }
+
+  function renderSelfCam() {
+    const b = $('#cam-btn');
+    if (b) {
+      b.hidden = !canCam;
+      b.classList.toggle('on', !!S.cam);
+      b.title = S.cam ? 'Kamerayı kapat' : 'Kamerayı aç';
+      b.querySelector('use').setAttribute('href', S.cam ? '#i-video' : '#i-video-off');
+    }
+    if (!S.selfEl) return;
+    const video = S.selfEl.querySelector('.cam-video');
+    S.selfEl.classList.toggle('has-cam', !!S.cam);
+    video.classList.add('mirror'); // kendi görüntün ayna gibi
+    if (S.cam) {
+      if (!video.srcObject || video.srcObject.getVideoTracks()[0] !== S.cam.track) video.srcObject = new MediaStream([S.cam.track]);
+      video.play().catch(() => {});
+    } else video.srcObject = null;
+    renderSide(S.selfEl, { muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen });
+  }
+
+  // =====================================================================
   // Ekran paylaşımı (Discord'daki "Yayın" gibi; izlemek isteğe bağlı)
   // =====================================================================
   const canShare = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
@@ -1498,7 +1631,8 @@
     if (shareBtn) {
       shareBtn.hidden = !canShare;
       shareBtn.classList.toggle('on', !!S.screen);
-      shareBtn.querySelector('span').textContent = S.screen ? 'Paylaşımı durdur' : 'Ekran paylaş';
+      shareBtn.querySelector('span').textContent = S.screen ? 'Durdur' : 'Ekran';
+      shareBtn.title = S.screen ? 'Ekran paylaşımını durdur' : 'Ekranını, bir pencereyi ya da sekmeyi paylaş';
     }
     let watched = 0;
     let tiles = 0;
@@ -1544,7 +1678,7 @@
   }
 
   function publishState() {
-    wsSend({ t: 'state', muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen });
+    wsSend({ t: 'state', muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen, camera: !!S.cam });
   }
 
   function toggleMute() {
@@ -2434,6 +2568,7 @@
     history.replaceState(null, '', '/r/' + encodeURIComponent(room) + location.search);
 
     S.selfEl = makeCard(name, true);
+    S.selfEl.classList.add('self');
     $('#participants').prepend(S.selfEl);
     renderSelf();
     connectWs();
@@ -2441,6 +2576,7 @@
 
   function leaveRoom(sendLeave = true) {
     if (S.screen) stopShare();
+    if (S.cam) stopCam();
     if (sendLeave) wsSend({ t: 'leave' });
     S.joined = false;
     S.welcomed = false;
@@ -2544,6 +2680,16 @@
     };
     $('#invite-btn').onclick = () => $('#copy-link').click();
     $('#share-btn').onclick = () => (S.screen ? stopShare() : startShare());
+    $('#cam-btn').onclick = () => (S.cam ? stopCam() : startCam());
+    renderSelfCam();
+    $('#cam-select').onchange = (e) => {
+      S.camId = e.target.value;
+      store.set('camId', S.camId);
+      if (S.cam) {
+        stopCam();
+        startCam();
+      }
+    };
     $('#share-btn').hidden = !canShare;
     $('#stage-invite').onclick = () => $('#copy-link').click();
     $('#chat-btn').onclick = () => {

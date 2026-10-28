@@ -346,7 +346,7 @@ function createServer(options = {}) {
     // YouTube gömülü oynatıcısı Referer ister (yoksa "Hata 153"); sadece origin gönderilir.
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Permissions-Policy', 'microphone=(self), camera=()');
+    res.setHeader('Permissions-Policy', 'microphone=(self), camera=(self), display-capture=(self)');
   }
 
   function handleHttp(req, res) {
@@ -418,7 +418,7 @@ function createServer(options = {}) {
   }
 
   function publicMember(m) {
-    return { id: m.id, name: m.name, muted: m.muted, deafened: m.deafened, online: m.online, sharing: !!m.sharing };
+    return { id: m.id, name: m.name, muted: m.muted, deafened: m.deafened, online: m.online, sharing: !!m.sharing, camera: !!m.camera };
   }
 
   function broadcast(roomName, msg, exceptId) {
@@ -528,6 +528,7 @@ function createServer(options = {}) {
             existing.muted = !!msg.muted;
             existing.deafened = !!msg.deafened;
             existing.sharing = !!msg.sharing;
+            existing.camera = !!msg.camera;
             member = existing;
             broadcast(roomName, { t: 'peer-state', ...publicMember(existing) }, id);
             log(`rejoin room=${roomName} id=${id}`);
@@ -539,6 +540,7 @@ function createServer(options = {}) {
               muted: !!msg.muted,
               deafened: !!msg.deafened,
               sharing: !!msg.sharing,
+              camera: !!msg.camera,
               online: true,
               ws,
               graceTimer: null,
@@ -578,6 +580,7 @@ function createServer(options = {}) {
           member.muted = !!msg.muted;
           member.deafened = !!msg.deafened;
           member.sharing = !!msg.sharing; // ekran paylaşıyor mu (görüntü P2P akar, sunucudan geçmez)
+          member.camera = !!msg.camera; // kamerası açık mı
           if (typeof msg.name === 'string' && cleanName(msg.name)) member.name = cleanName(msg.name);
           broadcast(member.room, { t: 'peer-state', ...publicMember(member) }, member.id);
           return;

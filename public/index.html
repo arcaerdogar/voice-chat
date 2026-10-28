@@ -35,6 +35,8 @@
     <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M13.7 21a2 2 0 0 1-3.4 0M18 8a6 6 0 0 0-9.3-5M6.3 6.3A6 6 0 0 0 6 8c0 7-3 9-3 9h14M3.5 3.5l17 17"/></symbol>
     <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
     <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z"/></symbol>
+    <symbol id="i-video-off" viewBox="0 0 24 24"><path d="M15.5 13.5V8a2 2 0 0 0-2-2H9M5 6a2 2 0 0 0-2.5 2v8a2 2 0 0 0 2 2h9a2 2 0 0 0 1.6-.8M15.5 10.5l6-3.5v10l-3-1.75"/><path d="M3 3l18 18"/></symbol>
     <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
   </svg>
 
@@ -90,7 +92,8 @@
         <button id="leave-btn" class="icon-btn hangup" title="Bağlantıyı kes"><svg class="ic"><use href="#i-hangup"/></svg></button>
       </div>
       <div class="share-row">
-        <button id="share-btn" class="share-btn" type="button" title="Ekranını, bir pencereyi ya da sekmeyi paylaş"><svg class="ic"><use href="#i-monitor"/></svg><span>Ekran paylaş</span></button>
+        <button id="cam-btn" class="share-btn" type="button" title="Kamerayı aç"><svg class="ic"><use href="#i-video-off"/></svg><span>Kamera</span></button>
+        <button id="share-btn" class="share-btn" type="button" title="Ekranını, bir pencereyi ya da sekmeyi paylaş"><svg class="ic"><use href="#i-monitor"/></svg><span>Ekran</span></button>
       </div>
 
       <div class="user-panel">
@@ -190,6 +193,10 @@
           <select id="mic-select"></select>
         </div>
         <div>
+          <label for="cam-select">Kamera</label>
+          <select id="cam-select"></select>
+        </div>
+        <div>
           <label for="out-select">Çıkış cihazı</label>
           <select id="out-select"></select>
           <p id="out-hint" class="hint" hidden>Bu tarayıcı çıkış cihazı seçmeyi desteklemiyor; sistem varsayılanı kullanılır.</p>
@@ -233,6 +240,7 @@
 
   <template id="participant-tpl">
     <div class="participant">
+      <video class="cam-video" muted playsinline autoplay></video>
       <div class="avatar"><span class="initial"></span></div>
       <div class="p-info">
         <div class="p-name"><span class="name"></span><span class="you" hidden>(sen)</span></div>
