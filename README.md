@@ -94,7 +94,7 @@ Sunucu tek bir Node.js sürecidir ve HTTP + WebSocket'i aynı porttan (`PORT`) s
 
 ### Kendi sunucunda (nginx + Docker)
 
-Adım adım kurulum: [deploy/DEPLOY.md](deploy/DEPLOY.md). Nginx ayarı: [deploy/riftvoice.conf](deploy/riftvoice.conf).
+Adım adım kurulum: [deploy/DEPLOY.md](deploy/DEPLOY.md). Nginx ayarı: [deploy/voicechat.ituacm.com.conf](deploy/voicechat.ituacm.com.conf) (eski IP linkleri için yönlendirme: [deploy/riftvoice.conf](deploy/riftvoice.conf)).
 `docker-compose.yml` uygulamayla birlikte bir TURN sunucusu (coturn, [deploy/turnserver.conf](deploy/turnserver.conf)) da çalıştırır.
 
 ### Seçenek 1: Render (önerilen, ücretsiz katman var)

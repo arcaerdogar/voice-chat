@@ -1,4 +1,4 @@
-# Sunucuya kurulum (IP: 212.64.215.98)
+# Sunucuya kurulum (voicechat.ituacm.com / 212.64.215.98)
 
 Bu kurulum mevcut sitelere dokunmaz:
 - nginx bloğu `default_server` kullanmaz, sadece `Host: 212.64.215.98` ile gelen istekleri karşılar.
@@ -124,13 +124,37 @@ sudo docker compose up -d
 Ücretsiz kota günde 10.000 birimdir; bir arama ~100 birim (günde ~100 arama), link ekleme ~1 birim.
 Aynı arama 6 saat önbellekte tutulur. Kota dolarsa uygulama bunu söyler ve linklerle çalışmaya devam eder.
 
-## Domain geri geldiğinde
-1. `/etc/nginx/conf.d/riftvoice.conf` içinde iki `server_name` satırını domain ile değiştir (ör. `voice.ituacm.com`).
-2. Sertifika satırlarını gerçek sertifikayla değiştir (Cloudflare Origin / Let's Encrypt).
-3. `sudo nginx -t && sudo systemctl reload nginx`
+## Domain ile kullanım: voicechat.ituacm.com
 
-TURN, IP üzerinden çalışmaya devam eder; değiştirmen gerekmez. (Domain Cloudflare proxy'si arkasında
-olacaksa TURN adresi yine IP kalmalı, çünkü Cloudflare TURN trafiğini taşımaz.)
+Domain Cloudflare üzerinden yayınlanır (diğer `*.ituacm.com` siteleri gibi). Uygulamada değişiklik gerekmez.
+
+**1. Cloudflare DNS:** `voicechat` için **A** kaydı → `212.64.215.98`, **Proxied** (turuncu bulut).
+- SSL/TLS modu **Full (strict)** olmalı (diğer siteleriniz için zaten öyleyse dokunmayın).
+- **Network → WebSockets** açık olmalı (varsayılan açıktır). Sesli sohbetin sinyal bağlantısı WebSocket kullanır.
+
+**2. Origin sertifikası alt alan adını kapsıyor mu?**
+```bash
+sudo openssl x509 -in /etc/ssl/cloudflare/ituacm.com.origin.crt -noout -ext subjectAltName
+```
+Çıktıda `*.ituacm.com` görünmeli. Görünmüyorsa Cloudflare'den `*.ituacm.com` için yeni bir Origin sertifikası oluşturun.
+
+**3. Nginx ayarlarını ekleyin:**
+```bash
+cd /opt/voice-chat && sudo git pull
+sudo cp deploy/voicechat.ituacm.com.conf /etc/nginx/conf.d/voicechat.ituacm.com.conf
+sudo cp deploy/riftvoice.conf /etc/nginx/conf.d/riftvoice.conf   # eski IP linklerini yeni adrese yönlendirir
+sudo nginx -t && sudo systemctl reload nginx
+```
+`nginx -t` hata verirse reload yapılmaz, diğer siteler eski ayarla çalışmaya devam eder.
+
+**4. Deneyin:** https://voicechat.ituacm.com — artık sertifika uyarısı çıkmaz. Eski
+`https://212.64.215.98/r/...` linkleri otomatik olarak yeni adrese yönlenir.
+
+Notlar:
+- **TURN IP üzerinden kalır** (`docker-compose.yml` → `TURN_URLS`). Cloudflare sadece web trafiğini taşır, TURN'ü taşıyamaz; değiştirmeyin.
+- Uygulamanın Docker konteynerini yeniden başlatmak gerekmez; sadece nginx ayarı değişti.
+- Diğer sitelerdeki "statik dosyaları 1 yıl önbellekle" kuralını bu siteye eklemeyin: dosya adları sabit
+  olduğu için güncellemelerden sonra tarayıcılar eski kodu çalıştırmaya devam eder.
 
 ## Sorun giderme
 - **Bir kişinin kartı "Bağlantı kurulamıyor (ağ kısıtlaması)" diyor:** TURN çalışıyor mu kontrol et (adım 6). 3478 ve 49160-49260 portlarının firewall'da açık olduğundan emin ol.
