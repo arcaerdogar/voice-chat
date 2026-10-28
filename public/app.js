@@ -108,6 +108,7 @@
     agc: store.get('agc', true),
     peers: new Map(),
     selfEl: null,
+    screen: null, // kendi ekran paylaşımım: { stream, video, audio }
     transmitting: false,
     unread: 0,
   };
@@ -224,7 +225,7 @@
     return el;
   }
 
-  function renderSide(el, { name, muted, deafened, offline }) {
+  function renderSide(el, { name, muted, deafened, offline, sharing }) {
     const li = el && el.side;
     if (!li) return;
     if (name != null) {
@@ -234,6 +235,7 @@
     li.querySelector('.sm-mute').hidden = !muted || deafened;
     li.querySelector('.sm-deaf').hidden = !deafened;
     li.classList.toggle('offline', !!offline);
+    li.classList.toggle('live', !!sharing);
   }
 
   function setCardStatus(el, kind, text) {
@@ -267,7 +269,7 @@
     else if (S.mode === 'ptt') text = `Bas-konuş (${S.pttLabel})`;
     if (S.track && S.aiActive) text += ' · AI gürültü engelleme';
     setCardStatus(S.selfEl, S.muted || S.deafened || !S.track ? 'bad' : 'ok', text);
-    renderSide(S.selfEl, { muted: S.muted || !S.track, deafened: S.deafened });
+    renderSide(S.selfEl, { muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen });
 
     // Sol alttaki kullanıcı paneli
     const up = $('#up-avatar');
@@ -313,7 +315,7 @@
     const lm = p.el.querySelector('.local-mute');
     lm.classList.toggle('on', p.localMuted);
     lm.innerHTML = svgIcon(p.localMuted ? 'speaker-off' : 'speaker');
-    renderSide(p.el, { name: p.name, muted: p.muted, deafened: p.deafened, offline: !p.online });
+    renderSide(p.el, { name: p.name, muted: p.muted, deafened: p.deafened, offline: !p.online, sharing: p.sharing });
   }
 
   // =====================================================================
@@ -684,7 +686,7 @@
     ws.onopen = () => {
       clearTimeout(openTimeout);
       if (S.ws !== ws) return;
-      wsSend({ t: 'join', room: S.room, id: S.id, name: S.name, muted: S.muted || !S.track, deafened: S.deafened });
+      wsSend({ t: 'join', room: S.room, id: S.id, name: S.name, muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen });
       startPing();
     };
     ws.onmessage = (e) => {
@@ -856,8 +858,13 @@
     p.muted = !!m.muted;
     p.deafened = !!m.deafened;
     p.online = !!m.online;
+    const wasSharing = p.sharing;
+    p.sharing = !!m.sharing;
     if (p.online) p.absentSince = 0;
+    if (wasSharing && !p.sharing) p.iWatch = false;
+    if (p.sharing && !wasSharing) chatAppend('', `${p.name} ekranını paylaşmaya başladı`, 0, true);
     renderPeer(p);
+    renderScreens();
     if (p.online && !wasOnline) kick(p);
   }
 
@@ -896,6 +903,9 @@
         localMuted: false,
         rtt: null,
         relay: false,
+        sharing: !!info.sharing,
+        watching: false, // bu kişi benim yayınımı izliyor
+        iWatch: false, // ben bu kişinin yayınını izliyorum
         el: null,
       };
       S.peers.set(p.id, p);
@@ -929,7 +939,10 @@
       p.muted = !!info.muted;
       p.deafened = !!info.deafened;
       p.online = info.online !== false;
+      p.sharing = !!info.sharing;
+      if (!p.sharing) p.iWatch = false;
     }
+    renderScreens();
     if (p.online) p.absentSince = 0;
     renderPeer(p);
     kick(p);
@@ -959,7 +972,9 @@
       if (p.el.side) p.el.side.remove();
       p.el.remove();
     }
+    if (p.screenEl) p.screenEl.remove();
     S.peers.delete(p.id);
+    renderScreens();
     updateCount();
   }
 
@@ -1021,6 +1036,11 @@
     };
     pc.ontrack = (e) => {
       if (p.pc !== pc) return;
+      if (e.transceiver && e.transceiver !== micTx(pc)) {
+        // Ekran paylaşımı izi: izliyorsam görüntüyü yeni bağlantının izleriyle tazele
+        if (p.iWatch) setTimeout(() => refreshScreenVideo(p), 0);
+        return;
+      }
       attachRemote(p, e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]));
     };
     pc.onconnectionstatechange = () => {
@@ -1030,6 +1050,12 @@
         p.attempts = 0;
         p.badSince = 0;
         tuneSenders(pc);
+        applyScreenSend(p);
+        // Bağlantı yeniden kurulduysa izleme isteğini tekrarla
+        if (p.iWatch) {
+          sendSignal(p, { watch: true }, p.sid);
+          refreshScreenVideo(p);
+        }
         if (p.audio && p.audio.paused) p.audio.play().catch(() => showAudioUnlock());
       } else if (st === 'failed') {
         p.badSince = 1; // bekçi hemen müdahale etsin
@@ -1047,22 +1073,74 @@
     const pc = createPc(p, randomId(12));
     if (S.track) pc.addTransceiver(S.track, { direction: 'sendrecv', streams: [S.stream] });
     else pc.addTransceiver('audio', { direction: 'sendrecv' });
+    // Ekran paylaşımı için baştan açık duran (boş) görüntü ve ekran sesi kanalları.
+    // Paylaşım başlayınca sadece içlerine iz konur (replaceTrack); yeniden müzakere gerekmez.
+    pc.addTransceiver('video', { direction: 'sendrecv' });
+    pc.addTransceiver('audio', { direction: 'sendrecv' });
+    applyScreenSend(p);
     renderPeer(p);
     // negotiationneeded olayı teklifi gönderecek.
+  }
+
+  /**
+   * Kanal sırası her iki tarafta aynıdır: [0] mikrofon, [1] ekran görüntüsü, [2] ekran sesi.
+   * (Başlatan taraf bu sırayla ekler; karşı taraf teklifteki sırayla alır.)
+   */
+  function micTx(pc) {
+    return pc.getTransceivers()[0];
+  }
+  function screenTx(pc) {
+    const t = pc.getTransceivers();
+    return { video: t[1] && t[1].receiver.track.kind === 'video' ? t[1] : null, audio: t[2] && t[2].receiver.track.kind === 'audio' ? t[2] : null };
   }
 
   function attachLocalTrack(p) {
     const pc = p.pc;
     if (!pc) return;
-    for (const t of pc.getTransceivers()) {
-      if (t.receiver.track.kind !== 'audio' || t.stopped) continue;
-      if (t.sender.track !== S.track) t.sender.replaceTrack(S.track).catch(() => {});
-      if (t.direction !== 'sendrecv') t.direction = 'sendrecv';
+    const t0 = micTx(pc);
+    if (t0 && !t0.stopped) {
+      if (t0.sender.track !== S.track) t0.sender.replaceTrack(S.track).catch(() => {});
+      if (t0.direction !== 'sendrecv') t0.direction = 'sendrecv';
+    }
+    for (const t of pc.getTransceivers().slice(1)) {
+      if (!t.stopped && t.direction !== 'sendrecv') t.direction = 'sendrecv';
+    }
+    applyScreenSend(p);
+  }
+
+  /**
+   * Ekran görüntüsünü sadece izlemek isteyen kişiye gönder. İzlemeyene iz hiç konmaz (0 bayt);
+   * herkes birbirine doğrudan bağlı olduğu için paylaşan kişinin internetini korur.
+   */
+  function applyScreenSend(p) {
+    if (!p.pc) return;
+    const { video, audio } = screenTx(p.pc);
+    const on = !!S.screen && !!p.watching;
+    for (const [tx, track, isVideo] of [
+      [video, S.screen && S.screen.video, true],
+      [audio, S.screen && S.screen.audio, false],
+    ]) {
+      if (!tx || tx.stopped) continue;
+      const want = on && track ? track : null;
+      if (tx.sender.track !== want) tx.sender.replaceTrack(want).catch(() => {});
+      try {
+        // İzlemeyene kodlayıcı da tamamen kapatılır (dolgu/deneme paketleri de gitmesin)
+        const prm = tx.sender.getParameters();
+        if (prm.encodings && prm.encodings.length) {
+          prm.encodings[0].active = !!want;
+          if (want) {
+            prm.encodings[0].maxBitrate = isVideo ? 2500000 : 128000;
+            if (isVideo) prm.encodings[0].maxFramerate = 30;
+          }
+          tx.sender.setParameters(prm).catch(() => {});
+        }
+      } catch {}
     }
   }
 
   function tuneSenders(pc) {
-    for (const s of pc.getSenders()) {
+    const t0 = micTx(pc);
+    for (const s of t0 ? [t0.sender] : []) {
       try {
         const prm = s.getParameters();
         if (!prm.encodings || !prm.encodings.length) continue;
@@ -1082,6 +1160,13 @@
   }
 
   async function processSignal(p, data) {
+    if (typeof data.watch === 'boolean') {
+      // Karşı taraf yayınımı izlemeye başladı / bıraktı
+      p.watching = data.watch;
+      applyScreenSend(p);
+      renderScreens();
+      return;
+    }
     if (data.renew) {
       if (!isInitiator(p)) return;
       const st = p.pc && p.pc.connectionState;
@@ -1293,8 +1378,173 @@
   // =====================================================================
   // Kontroller
   // =====================================================================
+  // =====================================================================
+  // Ekran paylaşımı (Discord'daki "Yayın" gibi; izlemek isteğe bağlı)
+  // =====================================================================
+  const canShare = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+
+  async function startShare() {
+    if (S.screen) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30, max: 30 }, width: { max: 1920 }, height: { max: 1080 } },
+        // Sekme/sistem sesi de paylaşılır; bu sekmenin kendi sesi (arkadaşların sesi) hariç tutulur ki yankı olmasın
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false, restrictOwnAudio: true },
+        systemAudio: 'include',
+        selfBrowserSurface: 'exclude',
+        surfaceSwitching: 'include',
+      });
+    } catch (err) {
+      if (err && err.name !== 'NotAllowedError' && err.name !== 'AbortError') toast('Ekran paylaşılamadı: ' + (err.message || err.name), 4000);
+      return;
+    }
+    const video = stream.getVideoTracks()[0];
+    if (!video) return stream.getTracks().forEach((t) => t.stop());
+    try {
+      video.contentHint = 'motion'; // oyun/video için akıcılık öncelikli
+    } catch {}
+    S.screen = { stream, video, audio: stream.getAudioTracks()[0] || null };
+    // Tarayıcının "Paylaşımı durdur" çubuğundan durdurulursa
+    video.addEventListener('ended', stopShare);
+    for (const p of S.peers.values()) applyScreenSend(p);
+    publishState();
+    renderSelf();
+    renderScreens();
+    sfx.join();
+  }
+
+  function stopShare() {
+    if (!S.screen) return;
+    S.screen.stream.getTracks().forEach((t) => t.stop());
+    S.screen = null;
+    for (const p of S.peers.values()) applyScreenSend(p);
+    if (S.selfScreenEl) {
+      S.selfScreenEl.remove();
+      S.selfScreenEl = null;
+    }
+    publishState();
+    renderSelf();
+    renderScreens();
+  }
+
+  function setWatch(p, on) {
+    p.iWatch = on;
+    if (p.pc) sendSignal(p, { watch: on }, p.sid);
+    if (on) refreshScreenVideo(p);
+    renderScreens();
+  }
+
+  /** İzlediğim kişinin ekran görüntüsünü ve sesini oynatıcıya bağla */
+  function refreshScreenVideo(p) {
+    if (!p.pc || !p.screenVideo) return;
+    const { video, audio } = screenTx(p.pc);
+    const tracks = [video && video.receiver.track, audio && audio.receiver.track].filter(Boolean);
+    const cur = p.screenVideo.srcObject;
+    if (!cur || cur.getTracks().length !== tracks.length || cur.getTracks().some((t, i) => t !== tracks[i])) {
+      p.screenVideo.srcObject = new MediaStream(tracks);
+    }
+    applyScreenAudio(p);
+    p.screenVideo.play().catch(() => showAudioUnlock());
+  }
+
+  function applyScreenAudio(p) {
+    if (!p.screenVideo) return;
+    p.screenVideo.volume = Math.max(0, Math.min(1, (p.screenVol ?? 100) / 100));
+    p.screenVideo.muted = S.deafened;
+  }
+
+  /** Paylaşım kartını oluştur (bir kez) */
+  function screenCard(owner, isSelf) {
+    const el = document.createElement('div');
+    el.className = 'screen-tile';
+    el.innerHTML =
+      '<video class="screen-video" playsinline></video>' +
+      '<div class="screen-idle"><span class="screen-ico">' + svgIcon('monitor') + '</span><span class="screen-msg"></span>' +
+      '<button class="btn primary watch-btn" type="button">Yayını izle</button></div>' +
+      '<div class="screen-bar"><span class="live-badge">CANLI</span><span class="screen-name"></span><span class="spacer"></span>' +
+      '<span class="screen-vol" title="Yayın sesi (sadece senin için)">' + svgIcon('speaker') + '<input type="range" min="0" max="100" value="100" aria-label="Yayın sesi"></span>' +
+      '<button class="icon-btn fs-btn" title="Tam ekran" type="button">' + svgIcon('fullscreen') + '</button>' +
+      '<button class="btn stop-btn" type="button"></button></div>';
+    const video = el.querySelector('video');
+    el.querySelector('.fs-btn').onclick = () => {
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else el.requestFullscreen().catch(() => {});
+    };
+    if (isSelf) {
+      video.muted = true; // kendi yayınımın sesini kendime çalma
+      el.querySelector('.screen-vol').hidden = true;
+      el.querySelector('.stop-btn').textContent = 'Paylaşımı durdur';
+      el.querySelector('.stop-btn').classList.add('danger');
+      el.querySelector('.stop-btn').onclick = stopShare;
+    } else {
+      owner.screenVideo = video;
+      el.querySelector('.watch-btn').onclick = () => setWatch(owner, true);
+      el.querySelector('.stop-btn').textContent = 'İzlemeyi bırak';
+      el.querySelector('.stop-btn').onclick = () => setWatch(owner, false);
+      const vol = el.querySelector('.screen-vol input');
+      vol.oninput = () => {
+        owner.screenVol = Number(vol.value);
+        applyScreenAudio(owner);
+      };
+    }
+    $('#screens').appendChild(el);
+    return el;
+  }
+
+  /** Paylaşımları çiz: izlenenler büyük, diğerleri "Yayını izle" kartı */
+  function renderScreens() {
+    const shareBtn = $('#share-btn');
+    if (shareBtn) {
+      shareBtn.hidden = !canShare;
+      shareBtn.classList.toggle('on', !!S.screen);
+      shareBtn.querySelector('span').textContent = S.screen ? 'Paylaşımı durdur' : 'Ekran paylaş';
+    }
+    let watched = 0;
+    let tiles = 0;
+    // Kendi yayınım (önizleme)
+    if (S.screen) {
+      if (!S.selfScreenEl) {
+        S.selfScreenEl = screenCard(null, true);
+        S.selfScreenEl.querySelector('video').srcObject = new MediaStream([S.screen.video]);
+        S.selfScreenEl.querySelector('video').play().catch(() => {});
+      }
+      const n = [...S.peers.values()].filter((p) => p.watching).length;
+      const el = S.selfScreenEl;
+      el.classList.add('watching', 'self');
+      el.querySelector('.screen-name').textContent = 'Ekranını paylaşıyorsun · ' + (n ? `${n} kişi izliyor` : 'henüz izleyen yok');
+      tiles++;
+      watched++;
+    }
+    for (const p of S.peers.values()) {
+      if (!p.sharing) {
+        if (p.screenEl) {
+          p.screenEl.remove();
+          p.screenEl = null;
+          p.screenVideo = null;
+        }
+        continue;
+      }
+      if (!p.screenEl) p.screenEl = screenCard(p, false);
+      const el = p.screenEl;
+      el.classList.toggle('watching', p.iWatch);
+      el.querySelector('.screen-name').textContent = p.name;
+      el.querySelector('.screen-msg').textContent = `${p.name} ekranını paylaşıyor`;
+      if (!p.iWatch && p.screenVideo && p.screenVideo.srcObject) {
+        p.screenVideo.pause();
+        p.screenVideo.srcObject = null;
+      }
+      tiles++;
+      if (p.iWatch) watched++;
+    }
+    const stage = $('.stage');
+    stage.classList.toggle('has-screens', tiles > 0);
+    stage.classList.toggle('focus', watched > 0);
+    renderSelf();
+  }
+
   function publishState() {
-    wsSend({ t: 'state', muted: S.muted || !S.track, deafened: S.deafened });
+    wsSend({ t: 'state', muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen });
   }
 
   function toggleMute() {
@@ -1327,7 +1577,10 @@
       S.muted = S.mutedBeforeDeafen;
       sfx.unmute();
     }
-    for (const p of S.peers.values()) applyPeerAudio(p);
+    for (const p of S.peers.values()) {
+      applyPeerAudio(p);
+      applyScreenAudio(p);
+    }
     applyTransmit();
     applyMusicVolume();
     renderSelf();
@@ -2187,6 +2440,7 @@
   }
 
   function leaveRoom(sendLeave = true) {
+    if (S.screen) stopShare();
     if (sendLeave) wsSend({ t: 'leave' });
     S.joined = false;
     S.welcomed = false;
@@ -2224,6 +2478,8 @@
     S.deafened = false;
     $('#participants').innerHTML = '';
     $('#side-members').innerHTML = '';
+    $('#screens').innerHTML = '';
+    $('.stage').classList.remove('has-screens', 'focus');
     $('.user-panel').classList.remove('speaking');
     $('#chat-log').innerHTML = '';
     banner(null);
@@ -2287,6 +2543,8 @@
       }
     };
     $('#invite-btn').onclick = () => $('#copy-link').click();
+    $('#share-btn').onclick = () => (S.screen ? stopShare() : startShare());
+    $('#share-btn').hidden = !canShare;
     $('#stage-invite').onclick = () => $('#copy-link').click();
     $('#chat-btn').onclick = () => {
       const panel = $('#chat-panel');

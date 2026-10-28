@@ -324,3 +324,45 @@ label.check span { font-weight: 500; }
 
 /* Etiket içindeki canlı değerler büyük harfe çevrilmesin */
 label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight: 500; }
+
+/* ---- Ekran paylaşımı ---- */
+.share-row { padding: 0 8px 8px; background: #232428; }
+.share-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 7px; border: 0; border-radius: 4px; background: var(--bg-4); color: var(--text); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.share-btn:hover { background: var(--bg-5); color: var(--head); }
+.share-btn.on { background: var(--red-2); color: #fff; }
+.side-member.live .sm-name::after { content: 'CANLI'; margin-left: 6px; font-size: 10px; font-weight: 800; color: #fff; background: var(--red); border-radius: 4px; padding: 1px 4px; vertical-align: 1px; }
+
+.screens { display: none; }
+.stage.has-screens .screens { display: grid; gap: 8px; padding: 16px 16px 0; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-content: start; }
+.stage.focus .screens { flex: 1; min-height: 0; grid-auto-rows: minmax(0, 1fr); }
+.stage.focus .participants { flex: none; display: flex; overflow-x: auto; padding: 8px 16px 16px; align-content: start; }
+.stage.focus .participant { flex: 0 0 200px; min-height: 0; padding: 8px; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto; }
+.stage.focus .participant .avatar { grid-column: 1; grid-row: 1; width: 36px; height: 36px; font-size: 15px; justify-self: start; }
+.stage.focus .participant .p-info { grid-column: 2; grid-row: 1; }
+.stage.focus .participant .p-icons { grid-column: 3; grid-row: 1; }
+.stage.focus .participant .p-volume, .stage.focus .participant .p-status { display: none; }
+
+.screen-tile { position: relative; background: var(--bg-2); border-radius: 8px; overflow: hidden; min-height: 160px; display: flex; flex-direction: column; }
+.screen-video { display: none; width: 100%; flex: 1; min-height: 0; object-fit: contain; background: #000; }
+.screen-tile.watching .screen-video { display: block; }
+.screen-tile.watching .screen-idle { display: none; }
+.screen-idle { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 20px; text-align: center; color: var(--muted); }
+.screen-ico .ic { width: 40px; height: 40px; color: var(--head); }
+.screen-msg { color: var(--head); font-weight: 600; }
+.screen-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: rgba(0,0,0,.5); font-size: 14px; }
+.screen-tile:not(.watching) .screen-bar .stop-btn, .screen-tile:not(.watching) .screen-vol, .screen-tile:not(.watching) .fs-btn { display: none; }
+.screen-name { font-weight: 600; color: var(--head); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-badge { font-size: 11px; font-weight: 800; color: #fff; background: var(--red); border-radius: 4px; padding: 1px 5px; }
+.screen-vol { display: flex; align-items: center; gap: 6px; color: var(--muted); width: 120px; }
+.screen-vol .ic { width: 16px; height: 16px; }
+.screen-bar .btn { padding: 5px 10px; font-size: 13px; }
+.screen-bar .btn.danger { background: var(--red-2); color: #fff; }
+.screen-tile:fullscreen { border-radius: 0; }
+.screen-tile:fullscreen .screen-video { display: block; }
+
+@media (max-width: 760px) {
+  .share-row { display: none; }
+  .stage.has-screens .screens { padding: 8px 8px 0; grid-template-columns: 1fr; }
+  .stage.focus .participant { flex-basis: 160px; }
+  .screen-vol { display: none !important; }
+}

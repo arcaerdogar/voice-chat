@@ -43,7 +43,8 @@ async function join(browser, name) {
   await page.goto(`${BASE}/r/${ROOM}`);
   await page.fill('#name-input', name);
   await page.click('#join-btn');
-  await page.waitForSelector('#room-view:not([hidden])', { timeout: 10000 });
+  // İlk Chrome açılışı yavaş olabilir
+  await page.waitForSelector('#room-view:not([hidden])', { timeout: 20000 });
   page.userName = name;
   return page;
 }

@@ -418,7 +418,7 @@ function createServer(options = {}) {
   }
 
   function publicMember(m) {
-    return { id: m.id, name: m.name, muted: m.muted, deafened: m.deafened, online: m.online };
+    return { id: m.id, name: m.name, muted: m.muted, deafened: m.deafened, online: m.online, sharing: !!m.sharing };
   }
 
   function broadcast(roomName, msg, exceptId) {
@@ -527,6 +527,7 @@ function createServer(options = {}) {
             existing.name = name;
             existing.muted = !!msg.muted;
             existing.deafened = !!msg.deafened;
+            existing.sharing = !!msg.sharing;
             member = existing;
             broadcast(roomName, { t: 'peer-state', ...publicMember(existing) }, id);
             log(`rejoin room=${roomName} id=${id}`);
@@ -537,6 +538,7 @@ function createServer(options = {}) {
               name,
               muted: !!msg.muted,
               deafened: !!msg.deafened,
+              sharing: !!msg.sharing,
               online: true,
               ws,
               graceTimer: null,
@@ -575,6 +577,7 @@ function createServer(options = {}) {
           if (!member || member.ws !== ws) return;
           member.muted = !!msg.muted;
           member.deafened = !!msg.deafened;
+          member.sharing = !!msg.sharing; // ekran paylaşıyor mu (görüntü P2P akar, sunucudan geçmez)
           if (typeof msg.name === 'string' && cleanName(msg.name)) member.name = cleanName(msg.name);
           broadcast(member.room, { t: 'peer-state', ...publicMember(member) }, member.id);
           return;

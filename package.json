@@ -13,7 +13,8 @@
     "test:music": "node --test test/music.test.js",
     "test:noise": "node --test test/noise.test.js",
     "test:sources": "node --test test/sources.test.js",
-    "test:stream": "node --test test/stream.test.js"
+    "test:stream": "node --test test/stream.test.js",
+    "test:screen": "node --test test/screen.test.js"
   },
   "engines": {
     "node": ">=18"
