@@ -3,170 +3,216 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RiftVoice</title>
-  <meta name="description" content="Oyun için hafif, kurulum gerektirmeyen sesli sohbet.">
-  <meta name="theme-color" content="#0a1018">
+  <title>Yankı</title>
+  <meta name="description" content="Arkadaşlarınla kurulum gerektirmeyen sesli sohbet ve ortak müzik.">
+  <meta name="theme-color" content="#1e1f22">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <noscript>RiftVoice için JavaScript gerekli.</noscript>
+  <noscript>Yankı için JavaScript gerekli.</noscript>
+
+  <!-- İkonlar -->
+  <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3M8.5 21h7"/></symbol>
+    <symbol id="i-mic-off" viewBox="0 0 24 24"><path d="M15 9.5V6a3 3 0 0 0-5.7-1.3M9 9v3a3 3 0 0 0 5 2.2"/><path d="M19 11a7 7 0 0 1-1.2 3.9M5 11a7 7 0 0 0 11.2 5.6M12 18v3M8.5 21h7"/><path d="M3.5 3.5l17 17"/></symbol>
+    <symbol id="i-head" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="5" height="7" rx="2"/><rect x="16" y="14" width="5" height="7" rx="2"/></symbol>
+    <symbol id="i-head-off" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 12.6-6.5M19.6 9.5c.3.8.4 1.6.4 2.5v3"/><rect x="3" y="14" width="5" height="7" rx="2"/><path d="M16 18v1a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3"/><path d="M3.5 3.5l17 17"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+    <symbol id="i-hangup" viewBox="0 0 24 24"><path d="M2.5 15.2c5.2-4.6 13.8-4.6 19 0l-2 2.5a1.2 1.2 0 0 1-1.5.3l-2.6-1.4a1.2 1.2 0 0 1-.6-1V14c-2.4-.8-5.2-.8-7.6 0v1.6a1.2 1.2 0 0 1-.6 1L4 18a1.2 1.2 0 0 1-1.5-.3z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4z" fill="currentColor"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></symbol>
+    <symbol id="i-speaker-off" viewBox="0 0 24 24"><path d="M11 5L6 9H3v6h3l5 4z" fill="currentColor"/><path d="M16 9l6 6M22 9l-6 6"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></symbol>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5l12.5 7.5L7 19.5z" fill="currentColor"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="4.5" width="4" height="15" rx="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M19 5L9 12l10 7z" fill="currentColor"/><path d="M5.5 5v14"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M5 5l10 7-10 7z" fill="currentColor"/><path d="M18.5 5v14"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12"/><path d="M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/></symbol>
+    <symbol id="i-repeat-one" viewBox="0 0 24 24"><path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12"/><path d="M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/><path d="M11 10.5l1.5-1v5" stroke-width="1.8"/></symbol>
+    <symbol id="i-bell-off" viewBox="0 0 24 24"><path d="M13.7 21a2 2 0 0 1-3.4 0M18 8a6 6 0 0 0-9.3-5M6.3 6.3A6 6 0 0 0 6 8c0 7-3 9-3 9h14M3.5 3.5l17 17"/></symbol>
+    <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
+  </svg>
 
   <!-- Giriş ekranı -->
   <section id="join-view" class="view">
-    <form id="join-form" class="card join-card" autocomplete="off">
-      <div class="brand">
-        <img src="/favicon.svg" alt="" width="40" height="40">
-        <div>
-          <h1>RiftVoice</h1>
-          <p class="muted">Kurulum yok. Linki at, konuşun.</p>
-        </div>
-      </div>
+    <form id="join-form" class="join-card" autocomplete="off">
+      <img class="join-logo" src="/favicon.svg" alt="" width="56" height="56">
+      <h1>Bir kanala katıl</h1>
+      <p class="join-sub">Kurulum yok, hesap yok. Linki at, konuşun.</p>
 
-      <label for="name-input">Kullanıcı adı</label>
-      <input id="name-input" name="name" maxlength="24" required placeholder="ör. Faker" autocomplete="nickname">
+      <label for="name-input">Kullanıcı adı <span class="req">*</span></label>
+      <input id="name-input" name="name" maxlength="24" required placeholder="ör. Ayşe" autocomplete="nickname">
 
-      <label for="room-input">Oda</label>
+      <label for="room-input">Kanal <span class="req">*</span></label>
       <div class="row">
-        <input id="room-input" name="room" maxlength="40" required pattern="[a-zA-Z0-9][a-zA-Z0-9\-]{0,39}" placeholder="ör. baron-takimi">
-        <button type="button" id="random-room" class="btn ghost" title="Rastgele oda adı">🎲</button>
+        <input id="room-input" name="room" maxlength="40" required pattern="[a-zA-Z0-9][a-zA-Z0-9\-]{0,39}" placeholder="ör. cuma-aksami">
+        <button type="button" id="random-room" class="btn ghost square" title="Rastgele kanal adı"><svg class="ic"><use href="#i-shuffle"/></svg></button>
       </div>
-      <p class="hint">Harf, rakam ve tire. Aynı oda adını giren herkes aynı kanala düşer.</p>
+      <p class="hint">Harf, rakam ve tire. Aynı kanal adını giren herkes aynı kanala düşer.</p>
 
       <label for="join-mic">Mikrofon</label>
       <select id="join-mic"><option value="">Varsayılan</option></select>
 
       <p id="join-error" class="error" role="alert" hidden></p>
       <button id="join-btn" class="btn primary big" type="submit">Kanala katıl</button>
-      <p class="hint center">Mikrofon izni istenecek. Ses doğrudan oyuncular arasında akar.</p>
+      <p class="hint center">Mikrofon izni istenecek. Ses doğrudan kişiler arasında akar.</p>
     </form>
   </section>
 
   <!-- Oda ekranı -->
-  <section id="room-view" class="view" hidden>
-    <header class="topbar">
-      <div class="room-title">
-        <img src="/favicon.svg" alt="" width="26" height="26">
-        <span class="muted">Oda</span>
-        <strong id="room-name"></strong>
-        <span id="member-count" class="pill"></span>
-        <button id="np-pill" class="pill np-pill" title="Çalan müzik" hidden>🎵 <span></span></button>
+  <section id="room-view" class="view app" hidden>
+    <!-- Sol: kanal ve kişiler -->
+    <nav class="sidebar" aria-label="Kanal">
+      <header class="side-head">
+        <span id="room-name" class="guild-name"></span>
+        <button id="copy-link" class="icon-btn" title="Davet linkini kopyala"><svg class="ic"><use href="#i-link"/></svg></button>
+      </header>
+      <div class="channels">
+        <div class="cat"><span>Kanaldakiler</span><span id="member-count" class="cat-count"></span></div>
+        <ul id="side-members" class="side-members"></ul>
+        <button id="invite-btn" class="invite-card" type="button" title="Davet linkini kopyala">
+          <svg class="ic"><use href="#i-link"/></svg>
+          <span><b>Arkadaşlarını davet et</b><small>Linki kopyala, gönder, katılsınlar</small></span>
+        </button>
+        <button id="np-pill" class="np-pill" title="Çalan müzik" hidden><svg class="ic"><use href="#i-music"/></svg><span></span></button>
       </div>
-      <div class="top-actions">
-        <span id="conn-status" class="conn-status ok" title="Sunucu bağlantısı">● Bağlı</span>
-        <button id="copy-link" class="btn ghost">🔗 Linki kopyala</button>
+
+      <div class="voice-status">
+        <div class="vs-text">
+          <div id="conn-status" class="conn-status ok" title="Sunucu bağlantısı">● Bağlı</div>
+          <div class="vs-sub" id="vs-room"></div>
+        </div>
+        <button id="leave-btn" class="icon-btn hangup" title="Bağlantıyı kes"><svg class="ic"><use href="#i-hangup"/></svg></button>
       </div>
-    </header>
 
-    <div id="banner" class="banner" hidden></div>
+      <div class="user-panel">
+        <div class="up-avatar avatar-sm" id="up-avatar"></div>
+        <div class="up-info">
+          <div id="up-name" class="up-name"></div>
+          <div id="up-status" class="up-status"></div>
+        </div>
+        <button id="mute-btn" class="icon-btn toggle" title="Mikrofonu kapat/aç (M)">
+          <svg class="ic i-on"><use href="#i-mic"/></svg><svg class="ic i-off"><use href="#i-mic-off"/></svg>
+        </button>
+        <button id="deafen-btn" class="icon-btn toggle" title="Sesi kapat/aç (D)">
+          <svg class="ic i-on"><use href="#i-head"/></svg><svg class="ic i-off"><use href="#i-head-off"/></svg>
+        </button>
+        <button id="settings-btn" class="icon-btn" title="Ayarlar"><svg class="ic"><use href="#i-gear"/></svg></button>
+      </div>
+    </nav>
 
-    <main class="room-main">
+    <!-- Orta: sesli kanal -->
+    <main class="stage">
+      <header class="stage-head">
+        <svg class="ic"><use href="#i-speaker"/></svg>
+        <strong id="stage-room"></strong>
+        <span class="head-div"></span>
+        <span class="muted head-desc">Ses doğrudan kişiler arasında akar</span>
+        <span class="spacer"></span>
+        <button id="stage-invite" class="icon-btn mobile-only" title="Davet linkini kopyala"><svg class="ic"><use href="#i-link"/></svg></button>
+        <button id="chat-btn" class="icon-btn chat-toggle" title="Sohbet ve müzik">
+          <svg class="ic"><use href="#i-chat"/></svg><span id="chat-badge" class="badge" hidden></span>
+        </button>
+      </header>
+      <div id="banner" class="banner" hidden></div>
       <div id="participants" class="participants" aria-live="polite"></div>
-
-      <aside class="chat" id="chat-panel">
-        <div class="side-tabs" role="tablist">
-          <button class="side-tab active" data-tab="chat" role="tab">💬 Sohbet</button>
-          <button class="side-tab" data-tab="music" role="tab">🎵 Müzik <span id="music-dot" class="live-dot" hidden></span></button>
-        </div>
-
-        <div id="tab-chat" class="tab-body">
-          <div id="chat-log" class="chat-log"></div>
-          <form id="chat-form" class="chat-form" autocomplete="off">
-            <input id="chat-input" maxlength="500" placeholder="Mesaj yaz… (/play link)">
-            <button class="btn ghost" type="submit">Gönder</button>
-          </form>
-        </div>
-
-        <div id="tab-music" class="tab-body music tab-off">
-          <form id="music-form" class="music-form" autocomplete="off">
-            <input id="music-input" maxlength="300" placeholder="YouTube / SoundCloud linki" aria-label="YouTube ya da SoundCloud linki veya şarkı adı">
-            <button class="btn primary" type="submit">Ekle</button>
-          </form>
-
-          <p id="music-empty" class="hint">Şu an müzik çalmıyor. Bir YouTube linki (ya da arama açıksa şarkı adı) ekle; odadaki herkeste aynı anda çalar.</p>
-          <p id="music-note" class="error" hidden></p>
-
-          <div id="now-playing" class="now-playing" hidden>
-            <div id="player-box" class="player-box"></div>
-            <div id="np-title" class="np-title"></div>
-            <div id="np-sub" class="np-sub"></div>
-            <div class="np-controls">
-              <button id="m-prev" class="btn ghost" title="Önceki şarkı (herkes için)">⏮️</button>
-              <button id="m-pause" class="btn ghost" title="Duraklat (herkes için)">⏸️</button>
-              <button id="m-skip" class="btn ghost" title="Geç (herkes için)">⏭️</button>
-              <button id="m-loop" class="btn ghost loop-btn" title="Tekrar: kapalı">🔁</button>
-              <button id="m-stop" class="btn ghost" title="Durdur ve sırayı temizle">⏹️</button>
-              <button id="m-off" class="btn ghost music-off" type="button">🔔 Bende kapat</button>
-              <span class="vol-wrap" title="Müzik sesi (sadece senin için)">🔉<input type="range" id="m-vol" min="0" max="100" value="35" aria-label="Müzik sesi"><span id="m-vol-val" class="num">35%</span></span>
-            </div>
-          </div>
-
-          <div id="queue-head" class="queue-head" hidden>Sıradakiler</div>
-          <ol id="music-queue" class="music-queue"></ol>
-
-          <div id="history-wrap" hidden>
-            <div class="queue-head">Son çalınanlar</div>
-            <ul id="music-history" class="music-queue history"></ul>
-          </div>
-
-          <p class="hint">📺 YouTube video da indirir (saatte ~350 MB), 🎧 SoundCloud sadece ses (~70 MB). İnternetini korumak için <b>Bende kapat</b>. Müzik herkesin kendi tarayıcısında çalar, mikrofondan gönderilmez. Ses seviyesi sadece senin için geçerli. Sohbette <b>/play</b>, <b>/skip</b>, <b>/prev</b>, <b>/loop</b>, <b>/stop</b> da kullanılabilir.</p>
-        </div>
-      </aside>
     </main>
 
-    <footer class="controls">
-      <button id="mute-btn" class="ctrl" title="Mikrofonu kapat/aç (M)">
-        <span class="ico">🎙️</span><span class="lbl">Mikrofon</span>
-      </button>
-      <button id="deafen-btn" class="ctrl" title="Sesi kapat/aç (D)">
-        <span class="ico">🎧</span><span class="lbl">Kulaklık</span>
-      </button>
-      <button id="settings-btn" class="ctrl" title="Ayarlar">
-        <span class="ico">⚙️</span><span class="lbl">Ayarlar</span>
-      </button>
-      <button id="chat-btn" class="ctrl chat-toggle" title="Sohbet">
-        <span class="ico">💬</span><span class="lbl">Sohbet</span><span id="chat-badge" class="badge" hidden></span>
-      </button>
-      <button id="leave-btn" class="ctrl danger" title="Ayrıl">
-        <span class="ico">📞</span><span class="lbl">Ayrıl</span>
-      </button>
-    </footer>
+    <!-- Sağ: sohbet ve müzik -->
+    <aside class="chat" id="chat-panel">
+      <div class="side-tabs" role="tablist">
+        <button class="side-tab active" data-tab="chat" role="tab"><svg class="ic"><use href="#i-chat"/></svg> Sohbet</button>
+        <button class="side-tab" data-tab="music" role="tab"><svg class="ic"><use href="#i-music"/></svg> Müzik <span id="music-dot" class="live-dot" hidden></span></button>
+      </div>
+
+      <div id="tab-chat" class="tab-body">
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form" class="chat-form" autocomplete="off">
+          <input id="chat-input" maxlength="500" placeholder="Mesaj gönder… (/play şarkı)">
+          <button class="btn primary" type="submit">Gönder</button>
+        </form>
+      </div>
+
+      <div id="tab-music" class="tab-body music tab-off">
+        <form id="music-form" class="music-form" autocomplete="off">
+          <input id="music-input" maxlength="300" placeholder="YouTube / SoundCloud linki" aria-label="YouTube ya da SoundCloud linki veya şarkı adı">
+          <button class="btn primary" type="submit">Ekle</button>
+        </form>
+
+        <p id="music-empty" class="hint">Şu an müzik çalmıyor. Bir link (ya da arama açıksa şarkı adı) ekle; kanaldaki herkeste aynı anda çalar.</p>
+        <p id="music-note" class="error" hidden></p>
+
+        <div id="now-playing" class="now-playing" hidden>
+          <div id="player-box" class="player-box"></div>
+          <div id="np-title" class="np-title"></div>
+          <div id="np-sub" class="np-sub"></div>
+          <div class="np-controls">
+            <button id="m-prev" class="icon-btn" title="Önceki şarkı (herkes için)"><svg class="ic"><use href="#i-prev"/></svg></button>
+            <button id="m-pause" class="icon-btn play" title="Duraklat (herkes için)"><svg class="ic"><use href="#i-pause"/></svg></button>
+            <button id="m-skip" class="icon-btn" title="Geç (herkes için)"><svg class="ic"><use href="#i-next"/></svg></button>
+            <button id="m-loop" class="icon-btn loop-btn" title="Tekrar: kapalı" data-mode="off"><svg class="ic"><use href="#i-repeat"/></svg></button>
+            <button id="m-stop" class="icon-btn" title="Durdur ve sırayı temizle"><svg class="ic"><use href="#i-stop"/></svg></button>
+            <button id="m-off" class="btn ghost music-off" type="button">Bende kapat</button>
+            <span class="vol-wrap" title="Müzik sesi (sadece senin için)"><svg class="ic"><use href="#i-speaker"/></svg><input type="range" id="m-vol" min="0" max="100" value="35" aria-label="Müzik sesi"><span id="m-vol-val" class="num">35%</span></span>
+          </div>
+        </div>
+
+        <div id="queue-head" class="queue-head" hidden>Sıradakiler</div>
+        <ol id="music-queue" class="music-queue"></ol>
+
+        <div id="history-wrap" hidden>
+          <div class="queue-head">Son çalınanlar</div>
+          <ul id="music-history" class="music-queue history"></ul>
+        </div>
+
+        <p class="hint">Müzik herkesin kendi cihazında çalar, mikrofondan gönderilmez; ses seviyesi sadece senin için. İnternetini korumak için <b>Bende kapat</b>. Sohbette <b>/play</b>, <b>/skip</b>, <b>/prev</b>, <b>/loop</b>, <b>/stop</b> da kullanılabilir.</p>
+      </div>
+    </aside>
   </section>
 
   <!-- Ayarlar -->
-  <dialog id="settings-dialog" class="card dialog">
+  <dialog id="settings-dialog" class="dialog">
     <form method="dialog" class="dialog-inner">
-      <h2>Ayarlar</h2>
+      <h2>Ses ayarları</h2>
 
-      <label for="mic-select">Mikrofon</label>
-      <select id="mic-select"></select>
+      <div class="grid2">
+        <div>
+          <label for="mic-select">Giriş cihazı</label>
+          <select id="mic-select"></select>
+        </div>
+        <div>
+          <label for="out-select">Çıkış cihazı</label>
+          <select id="out-select"></select>
+          <p id="out-hint" class="hint" hidden>Bu tarayıcı çıkış cihazı seçmeyi desteklemiyor; sistem varsayılanı kullanılır.</p>
+        </div>
+      </div>
 
-      <label for="out-select">Hoparlör / kulaklık</label>
-      <select id="out-select"></select>
-      <p id="out-hint" class="hint" hidden>Bu tarayıcı çıkış cihazı seçmeyi desteklemiyor; sistem varsayılanı kullanılır.</p>
-
-      <label>Konuşma modu</label>
+      <label>Giriş modu</label>
       <div class="seg">
-        <label><input type="radio" name="mode" value="vad" checked> Açık mikrofon</label>
+        <label><input type="radio" name="mode" value="vad" checked> Ses etkinliği</label>
         <label><input type="radio" name="mode" value="ptt"> Bas-konuş</label>
       </div>
       <div id="ptt-row" class="row" hidden>
         <span class="muted">Tuş:</span>
         <button type="button" id="ptt-key-btn" class="btn ghost">V</button>
       </div>
-      <p class="hint" id="ptt-hint" hidden>⚠️ Tarayıcılar, sekme arka plandayken klavyeyi dinleyemez. Oyun tam ekrandayken bas-konuş çalışmaz; oyun sırasında <b>Açık mikrofon + ses eşiği</b> kullanın.</p>
+      <p class="hint" id="ptt-hint" hidden>Tarayıcılar, sekme arka plandayken klavyeyi dinleyemez. Oyun tam ekrandayken bas-konuş çalışmaz; o sırada <b>Ses etkinliği</b> kullanın.</p>
 
-      <label for="gate-range">Ses eşiği <span id="gate-val" class="muted"></span> <span class="muted">· mikrofon:</span> <span id="meter-val" class="num">—</span></label>
+      <label for="gate-range">Giriş hassasiyeti <span id="gate-val" class="muted"></span> <span class="muted">· mikrofon:</span> <span id="meter-val" class="num">—</span></label>
       <div class="meter gate-meter" aria-hidden="true">
         <div id="meter-fill" class="meter-fill"></div>
         <div id="gate-mark" class="gate-mark"></div>
       </div>
       <input type="range" id="gate-range" min="-80" max="-20" step="1" value="-80">
-      <label class="check"><input type="checkbox" id="auto-gate-check" checked> <span><b>Otomatik eşik</b> (önerilir)</span></label>
-      <p class="hint">Konuşmadığın anlarda mikrofon tamamen susar; gürültü engellemeden sızan oyun sesi de gitmez. Kaydırıcıyı oynatırsan elle ayara geçer (en sol = kapalı).</p>
+      <label class="check"><input type="checkbox" id="auto-gate-check" checked> <span><b>Otomatik</b> (önerilir)</span></label>
+      <p class="hint">Konuşmadığın anlarda mikrofon tamamen susar. Kaydırıcıyı oynatırsan elle ayara geçer (en sol = kapalı).</p>
 
+      <div class="section-title">Ses işleme</div>
       <label class="check"><input type="checkbox" id="ai-ns-check" checked> <span><b>Yapay zekâ gürültü engelleme</b> (önerilir)</span></label>
-      <p class="hint">Konuşma dışındaki sesleri siler: hoparlörden gelen oyun sesi, müzik, klavye, fan. Tam çözüm kulaklıktır; hoparlör kullanıyorsan bunu açık tut.</p>
+      <p class="hint">Konuşma dışındaki sesleri siler: hoparlörden gelen oyun sesi, müzik, klavye, fan.</p>
       <label class="check"><input type="checkbox" id="ns-check" checked> Tarayıcının gürültü engellemesi</label>
       <label class="check"><input type="checkbox" id="ec-check" checked> Yankı engelleme</label>
       <label class="check"><input type="checkbox" id="agc-check" checked> Otomatik ses seviyesi</label>
@@ -186,12 +232,15 @@
         <div class="p-name"><span class="name"></span><span class="you" hidden>(sen)</span></div>
         <div class="p-status"><span class="dot"></span><span class="status-text"></span></div>
       </div>
-      <div class="p-icons"><span class="i-mute" title="Mikrofon kapalı" hidden>🔇</span><span class="i-deaf" title="Sesi kapalı" hidden>🙉</span></div>
+      <div class="p-icons">
+        <span class="i-mute" title="Mikrofon kapalı" hidden><svg class="ic"><use href="#i-mic-off"/></svg></span>
+        <span class="i-deaf" title="Sesi kapalı" hidden><svg class="ic"><use href="#i-head-off"/></svg></span>
+      </div>
       <div class="p-volume" hidden>
-        <span class="vol-ico" aria-hidden="true">🔊</span>
+        <svg class="ic vol-ico" aria-hidden="true"><use href="#i-speaker"/></svg>
         <input type="range" min="0" max="200" step="5" value="100" class="vol" aria-label="Ses seviyesi" title="Ses seviyesi (çift tık: %100)">
         <span class="vol-val num">100%</span>
-        <button class="btn tiny ghost local-mute" title="Bu kişiyi sustur">🔈</button>
+        <button class="icon-btn small local-mute" title="Bu kişiyi sadece kendinde sustur"><svg class="ic"><use href="#i-speaker"/></svg></button>
       </div>
     </div>
   </template>

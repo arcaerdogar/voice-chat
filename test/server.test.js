@@ -66,7 +66,7 @@ test('HTTP: sağlık, ana sayfa, oda linki, 404 ve dizin dışına çıkma engel
     assert.equal(h.ok, true);
     const home = await fetch(srv.base + '/');
     assert.equal(home.status, 200);
-    assert.match(await home.text(), /RiftVoice/);
+    assert.match(await home.text(), /Yankı/);
     const room = await fetch(srv.base + '/r/baron-takimi');
     assert.equal(room.status, 200);
     assert.match(room.headers.get('content-type'), /text\/html/);

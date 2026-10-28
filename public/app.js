@@ -1,6 +1,6 @@
 'use strict';
 /*
- * RiftVoice istemcisi.
+ * Yankı istemcisi.
  *
  * Mimari:
  *  - WebSocket (/ws) yalnızca sinyal içindir: oda üyeliği + WebRTC SDP/ICE mesajları.
@@ -190,13 +190,50 @@
     }
   }
 
+  const svgIcon = (id) => `<svg class="ic"><use href="#i-${id}"/></svg>`;
+
+  /** İsimden sabit bir avatar rengi (herkeste aynı) */
+  function avatarHue(name) {
+    let h = 0;
+    for (const ch of String(name || '?')) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+    return h % 360;
+  }
+  function paintAvatar(el, name) {
+    const hue = avatarHue(name);
+    el.style.setProperty('--av', `hsl(${hue} 60% 52%)`);
+    el.style.setProperty('--av-bg', `hsl(${hue} 28% 20%)`);
+  }
+
   function makeCard(name, isSelf) {
     const el = $('#participant-tpl').content.firstElementChild.cloneNode(true);
     el.querySelector('.initial').textContent = (name || '?').trim().charAt(0).toUpperCase();
     el.querySelector('.name').textContent = name;
     el.querySelector('.you').hidden = !isSelf;
     if (!isSelf) el.querySelector('.p-volume').hidden = false;
+    paintAvatar(el, name);
+    // Sol paneldeki kişi listesi öğesi (Discord'daki sesli kanal altındaki liste gibi)
+    const li = document.createElement('li');
+    li.className = 'side-member';
+    li.innerHTML = '<span class="avatar-sm"></span><span class="sm-name"></span><span class="sm-icons"><span class="sm-mute" hidden>' + svgIcon('mic-off') + '</span><span class="sm-deaf" hidden>' + svgIcon('head-off') + '</span></span>';
+    li.querySelector('.avatar-sm').textContent = (name || '?').trim().charAt(0).toUpperCase();
+    li.querySelector('.sm-name').textContent = name;
+    paintAvatar(li, name);
+    if (isSelf) $('#side-members').prepend(li);
+    else $('#side-members').appendChild(li);
+    el.side = li;
     return el;
+  }
+
+  function renderSide(el, { name, muted, deafened, offline }) {
+    const li = el && el.side;
+    if (!li) return;
+    if (name != null) {
+      li.querySelector('.sm-name').textContent = name;
+      li.querySelector('.avatar-sm').textContent = (name || '?').charAt(0).toUpperCase();
+    }
+    li.querySelector('.sm-mute').hidden = !muted || deafened;
+    li.querySelector('.sm-deaf').hidden = !deafened;
+    li.classList.toggle('offline', !!offline);
   }
 
   function setCardStatus(el, kind, text) {
@@ -206,11 +243,17 @@
   }
 
   function setSpeaking(el, on) {
-    if (el && el.classList.contains('speaking') !== on) el.classList.toggle('speaking', on);
+    if (!el || el.classList.contains('speaking') === on) return;
+    el.classList.toggle('speaking', on);
+    if (el.side) el.side.classList.toggle('speaking', on);
+    if (el === S.selfEl) $('.user-panel').classList.toggle('speaking', on);
   }
 
   function updateCount() {
-    $('#member-count').textContent = `${S.peers.size + 1} kişi`;
+    const n = S.peers.size + 1;
+    $('#member-count').textContent = `${n} kişi`;
+    // Kanalda tek başınaysa davet kartını öne çıkar
+    $('#invite-btn').classList.toggle('alone', n === 1);
   }
 
   function renderSelf() {
@@ -224,11 +267,19 @@
     else if (S.mode === 'ptt') text = `Bas-konuş (${S.pttLabel})`;
     if (S.track && S.aiActive) text += ' · AI gürültü engelleme';
     setCardStatus(S.selfEl, S.muted || S.deafened || !S.track ? 'bad' : 'ok', text);
+    renderSide(S.selfEl, { muted: S.muted || !S.track, deafened: S.deafened });
+
+    // Sol alttaki kullanıcı paneli
+    const up = $('#up-avatar');
+    up.textContent = (S.name || '?').charAt(0).toUpperCase();
+    paintAvatar(up, S.name);
+    $('#up-name').textContent = S.name;
+    $('#up-status').textContent = text;
 
     $('#mute-btn').classList.toggle('off', S.muted || S.deafened || !S.track);
-    $('#mute-btn .ico').textContent = S.muted || S.deafened || !S.track ? '🔇' : '🎙️';
+    $('#mute-btn').title = (S.muted || S.deafened || !S.track ? 'Mikrofonu aç' : 'Mikrofonu kapat') + ' (M)';
     $('#deafen-btn').classList.toggle('off', S.deafened);
-    $('#deafen-btn .ico').textContent = S.deafened ? '🙉' : '🎧';
+    $('#deafen-btn').title = (S.deafened ? 'Sesi aç' : 'Sesi kapat') + ' (D)';
   }
 
   function renderPeer(p) {
@@ -261,7 +312,8 @@
     }
     const lm = p.el.querySelector('.local-mute');
     lm.classList.toggle('on', p.localMuted);
-    lm.textContent = p.localMuted ? '🔇' : '🔈';
+    lm.innerHTML = svgIcon(p.localMuted ? 'speaker-off' : 'speaker');
+    renderSide(p.el, { name: p.name, muted: p.muted, deafened: p.deafened, offline: !p.online });
   }
 
   // =====================================================================
@@ -903,7 +955,10 @@
       } catch {}
       p.boostGain = null;
     }
-    if (p.el) p.el.remove();
+    if (p.el) {
+      if (p.el.side) p.el.side.remove();
+      p.el.remove();
+    }
     S.peers.delete(p.id);
     updateCount();
   }
@@ -1317,15 +1372,15 @@
 
   /** Kaynak işareti: SoundCloud sadece ses, YouTube video + ses (daha çok internet) */
   function sourceLabel(item, short) {
-    if (sourceOf(item) === 'sc') return short ? '🎧' : '🎧 SoundCloud';
-    if (S.music.stream) return short ? '🎧' : '🎧 YouTube (sadece ses)';
-    return short ? '📺' : '📺 YouTube';
+    if (sourceOf(item) === 'sc') return 'SoundCloud';
+    if (S.music.stream) return short ? 'YouTube' : 'YouTube · sadece ses';
+    return 'YouTube';
   }
 
   const LOOP_INFO = {
-    off: { icon: '🔁', title: 'Tekrar: kapalı (tıkla: liste tekrarı)', next: 'all' },
-    all: { icon: '🔁', title: 'Tekrar: liste (tıkla: tek şarkı)', next: 'one' },
-    one: { icon: '🔂', title: 'Tekrar: tek şarkı (tıkla: kapalı)', next: 'off' },
+    off: { icon: 'repeat', title: 'Tekrar: kapalı (tıkla: liste tekrarı)', next: 'all' },
+    all: { icon: 'repeat', title: 'Tekrar: liste (tıkla: tek şarkı)', next: 'one' },
+    one: { icon: 'repeat-one', title: 'Tekrar: tek şarkı (tıkla: kapalı)', next: 'off' },
   };
 
   /** Sıra/geçmiş satırı */
@@ -1350,7 +1405,8 @@
     const cur = S.music.current;
     const loop = LOOP_INFO[S.music.loop] || LOOP_INFO.off;
     const lb = $('#m-loop');
-    lb.textContent = loop.icon;
+    lb.innerHTML = svgIcon(loop.icon);
+    lb.dataset.mode = S.music.loop;
     lb.title = loop.title;
     lb.classList.toggle('on', S.music.loop !== 'off');
     $('#music-input').placeholder = S.music.search ? 'YouTube / SoundCloud linki ya da şarkı adı' : 'YouTube / SoundCloud linki';
@@ -1365,7 +1421,7 @@
           : S.music.stream
             ? 'YouTube, sunucudan sadece ses olarak (saatte ~60 MB)'
             : 'YouTube: video + ses (saatte ~350 MB)';
-      $('#m-pause').textContent = cur.pausedAt != null ? '▶️' : '⏸️';
+      $('#m-pause').innerHTML = svgIcon(cur.pausedAt != null ? 'play' : 'pause');
       $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
     }
     const pill = $('#np-pill');
@@ -1410,7 +1466,7 @@
     if (S.outId && el.setSinkId) el.setSinkId(S.outId).catch(() => {});
     const ui = document.createElement('div');
     ui.className = 'stream-ui';
-    ui.innerHTML = '<div class="stream-bar"><div class="stream-fill"></div></div><div class="stream-times"><span class="st-now">0:00</span><span class="st-mode">🎧 sadece ses</span><span class="st-dur"></span></div>';
+    ui.innerHTML = '<div class="stream-bar"><div class="stream-fill"></div></div><div class="stream-times"><span class="st-now">0:00</span><span class="st-mode">sadece ses</span><span class="st-dur"></span></div>';
     const box = $('#player-box');
     box.replaceChildren(el, ui);
     box.classList.remove('sc');
@@ -1881,7 +1937,7 @@
     const b = $('#m-off');
     if (!b) return;
     b.classList.toggle('on', S.musicOff);
-    b.textContent = S.musicOff ? '🔕 Müzik sende kapalı' : '🔔 Bende kapat';
+    b.textContent = S.musicOff ? 'Müzik sende kapalı' : 'Bende kapat';
     b.title = S.musicOff
       ? 'Müzik sadece sende kapalı; diğerlerinde çalıyor. Tıklayınca kaldığı yerden açılır.'
       : 'Müziği sadece kendinde kapat: hiç internet harcamaz, diğerlerinde çalmaya devam eder.';
@@ -2054,7 +2110,9 @@
     $('#join-view').hidden = true;
     $('#room-view').hidden = false;
     $('#room-name').textContent = S.room;
-    document.title = `${S.room} · RiftVoice`;
+    $('#vs-room').textContent = S.room;
+    $('#stage-room').textContent = S.room;
+    document.title = `${S.room} · Yankı`;
     const btn = $('#join-btn');
     btn.disabled = false;
     btn.textContent = 'Kanala katıl';
@@ -2165,6 +2223,8 @@
     S.id = randomId(); // yeni katılım = yeni kimlik
     S.deafened = false;
     $('#participants').innerHTML = '';
+    $('#side-members').innerHTML = '';
+    $('.user-panel').classList.remove('speaking');
     $('#chat-log').innerHTML = '';
     banner(null);
     $('#room-view').hidden = true;
@@ -2172,14 +2232,14 @@
     const btn = $('#join-btn');
     btn.disabled = false;
     btn.textContent = 'Kanala katıl';
-    document.title = 'RiftVoice';
+    document.title = 'Yankı';
   }
 
   // =====================================================================
   // Başlatma
   // =====================================================================
-  const ADJ = ['baron', 'ejder', 'nexus', 'kule', 'orman', 'koridor', 'rift', 'elder', 'herald', 'minyon'];
-  const NOUN = ['takimi', 'ekibi', 'kadrosu', 'mangasi', 'grubu'];
+  const ADJ = ['mavi', 'gece', 'kahve', 'yildiz', 'bulut', 'deniz', 'ruzgar', 'gunes', 'ay', 'kirmizi'];
+  const NOUN = ['odasi', 'kosesi', 'meclisi', 'kanali', 'ekibi'];
   function randomRoom() {
     const r = (a) => a[Math.floor(Math.random() * a.length)];
     return `${r(ADJ)}-${r(NOUN)}-${Math.floor(100 + Math.random() * 900)}`;
@@ -2226,6 +2286,8 @@
         window.prompt('Linki kopyala:', link);
       }
     };
+    $('#invite-btn').onclick = () => $('#copy-link').click();
+    $('#stage-invite').onclick = () => $('#copy-link').click();
     $('#chat-btn').onclick = () => {
       const panel = $('#chat-panel');
       panel.classList.toggle('open');

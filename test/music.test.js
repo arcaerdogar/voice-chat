@@ -180,7 +180,7 @@ test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yans
   await B.click('.side-tab[data-tab=music]');
   await B.click('#m-loop');
   await A.waitForFunction(() => window.__rv.music.loop === 'one');
-  assert.equal(await A.textContent('#m-loop'), '🔂');
+  assert.equal(await A.getAttribute('#m-loop', 'data-mode'), 'one');
 
   // Durdur: müzik herkeste durur
   await A.click('#m-stop');

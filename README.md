@@ -1,12 +1,12 @@
-# RiftVoice
+# Yankı
 
-Oyun (LoL vb.) sırasında kullanmak için hafif, kurulum gerektirmeyen, **çökmemesi için tasarlanmış** web tabanlı sesli sohbet.
+Arkadaşlarla oyun oynarken ya da takılırken kullanmak için hafif, kurulum gerektirmeyen, **çökmemesi için tasarlanmış** web tabanlı sesli sohbet ve ortak müzik. Arayüz Discord tarzındadır.
 
 Linki aç → adını yaz → **Kanala katıl**. Aynı oda linkini açan herkes aynı kanaldadır.
 
 ## Neden çökmez?
 
-| Sorun | RiftVoice'ta ne olur |
+| Sorun | Yankı'ta ne olur |
 |---|---|
 | Sunucu çöker / yeniden başlar / yeni sürüm deploy edilir | Ses **kesilmez**. Ses sunucudan değil, oyuncular arasında doğrudan (WebRTC P2P) akar. İstemciler sunucuya otomatik yeniden bağlanıp odaya geri döner. |
 | İnternetin bir anlığına gider | Sinyal bağlantısı üstel geri çekilmeyle yeniden kurulur; sunucu seni 20 sn boyunca odada tutar. |
