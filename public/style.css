@@ -156,7 +156,7 @@ input[type=checkbox], input[type=radio] { width: auto; accent-color: var(--accen
 .up-status { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Orta alan */
-.stage { background: #000; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.stage { background: var(--bg-1); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .stage-head { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; background: var(--bg-3); color: var(--muted); box-shadow: 0 1px 0 var(--sep); }
 .stage-head strong { color: var(--head); }
 .head-div { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
@@ -165,39 +165,10 @@ input[type=checkbox], input[type=radio] { width: auto; accent-color: var(--accen
 .banner { background: var(--amber); color: #111; padding: 8px 16px; font-size: 14px; font-weight: 600; display: flex; gap: 10px; align-items: center; }
 .banner .btn { padding: 4px 10px; background: #111; color: #fff; }
 
-.participants {
-  flex: 1; overflow-y: auto; padding: 16px; display: grid; gap: 8px; align-content: center;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-}
-.participant {
-  position: relative; background: var(--av-bg, var(--bg-2)); border-radius: 8px; padding: 18px 12px 12px; min-height: 180px;
-  display: grid; grid-template-columns: 1fr auto; grid-template-rows: 1fr auto auto; gap: 6px 8px; align-items: end;
-  outline: 2px solid transparent; outline-offset: -2px; transition: outline-color .1s;
-}
-.participant.speaking { outline-color: var(--green); }
-.participant.offline { opacity: .55; }
-.participant .avatar {
-  grid-column: 1 / -1; justify-self: center; align-self: center; width: 80px; height: 80px; border-radius: 50%;
-  display: grid; place-items: center; font-size: 34px; font-weight: 700; color: #fff; background: var(--av, var(--accent));
-  box-shadow: 0 0 0 3px transparent; transition: box-shadow .1s;
-}
-.participant.speaking .avatar { box-shadow: 0 0 0 3px var(--bg-2), 0 0 0 6px var(--green); }
-.p-info { min-width: 0; }
-.p-name { display: inline-flex; gap: 6px; max-width: 100%; background: rgba(0,0,0,.45); border-radius: 4px; padding: 2px 8px; font-weight: 600; color: var(--head); font-size: 14px; }
-.p-name .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.p-name .you { color: var(--muted); font-weight: 400; }
-.p-status { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; margin-top: 4px; padding-left: 2px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
 .dot.ok { background: var(--green); }
 .dot.warn { background: var(--amber); }
 .dot.bad { background: var(--red); }
-.p-icons { display: flex; gap: 4px; align-self: end; }
-.p-icons > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,.55); color: var(--red); }
-.p-icons .ic { width: 15px; height: 15px; }
-.p-volume { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; background: rgba(0,0,0,.25); border-radius: 6px; padding: 4px 6px 4px 8px; }
-.p-volume .vol { flex: 1; min-width: 0; }
-.vol-ico { width: 16px; height: 16px; color: var(--muted); }
-.local-mute.on { color: var(--red); background: rgba(242,63,67,.12); }
 
 /* Sayısal ses göstergeleri */
 .num { font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--muted); min-width: 40px; text-align: right; display: inline-block; }
@@ -307,13 +278,6 @@ label.check span { font-weight: 500; }
   .side-head, .channels { display: none; }
   .head-desc, .head-div { display: none; }
   /* Kompakt kişi satırları: avatar solda, isim yanında, ses kaydırıcısı altta */
-  .participants { grid-template-columns: 1fr; align-content: start; padding: 8px; gap: 6px; }
-  .participant { min-height: 0; padding: 10px; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; align-items: center; gap: 6px 10px; }
-  .participant .avatar { grid-column: 1; grid-row: 1; justify-self: start; width: 44px; height: 44px; font-size: 18px; }
-  .participant.speaking .avatar { box-shadow: 0 0 0 2px var(--bg-2), 0 0 0 4px var(--green); }
-  .participant .p-info { grid-column: 2; grid-row: 1; }
-  .participant .p-icons { grid-column: 3; grid-row: 1; align-self: center; }
-  .participant .p-volume { grid-column: 1 / -1; grid-row: 2; }
   .chat-toggle, .mobile-only { display: inline-grid; }
   /* Kapalı panel gizlenmez, ekran dışına kayar: müzik çalmaya devam eder */
   .chat { position: fixed; inset: 0 0 auto 0; bottom: 104px; z-index: 20; transform: translateX(105%); visibility: hidden; border-left: 0; }
@@ -336,12 +300,6 @@ label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight:
 .screens { display: none; }
 .stage.has-screens .screens { display: grid; gap: 8px; padding: 16px 16px 0; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); align-content: start; }
 .stage.focus .screens { flex: 1; min-height: 0; grid-auto-rows: minmax(0, 1fr); }
-.stage.focus .participants { flex: none; display: flex; overflow-x: auto; padding: 8px 16px 16px; align-content: start; }
-.stage.focus .participant { flex: 0 0 200px; min-height: 0; padding: 8px; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto; }
-.stage.focus .participant .avatar { grid-column: 1; grid-row: 1; width: 36px; height: 36px; font-size: 15px; justify-self: start; }
-.stage.focus .participant .p-info { grid-column: 2; grid-row: 1; }
-.stage.focus .participant .p-icons { grid-column: 3; grid-row: 1; }
-.stage.focus .participant .p-volume, .stage.focus .participant .p-status { display: none; }
 
 .screen-tile { position: relative; background: var(--bg-2); border-radius: 8px; overflow: hidden; min-height: 160px; display: flex; flex-direction: column; }
 .screen-video { display: none; width: 100%; flex: 1; min-height: 0; object-fit: contain; background: #000; }
@@ -364,26 +322,88 @@ label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight:
 @media (max-width: 760px) {
   .share-row { padding-top: 8px; }
   .stage.has-screens .screens { padding: 8px 8px 0; grid-template-columns: 1fr; }
-  .stage.focus .participant { flex-basis: 160px; }
   .screen-vol { display: none !important; }
 }
 
 /* ---- Kamera ---- */
 #cam-btn.on { background: var(--accent); color: #fff; }
-.participant { overflow: hidden; }
-.participant > :not(.cam-video) { position: relative; z-index: 1; }
-.participant .cam-video { display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; z-index: 0; }
+
+/* ================================================================
+   Sesli kanal kutuları: 16:9, sahneyi dolduracak şekilde ortalanır
+   (genişlik --tile-w, app.js'teki layoutTiles hesaplar)
+   ================================================================ */
+.participants {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 16px;
+  display: flex; flex-wrap: wrap; justify-content: center; align-content: center; gap: 8px;
+}
+.participant {
+  position: relative; flex: none; width: var(--tile-w, 320px); aspect-ratio: 16 / 9; overflow: hidden;
+  background: var(--av-bg, var(--bg-2)); border-radius: 8px; container-type: inline-size;
+}
+.participant.offline { opacity: .55; }
+.participant .avatar {
+  position: absolute; left: 50%; top: 46%; transform: translate(-50%, -50%);
+  width: min(26cqw, 104px); height: min(26cqw, 104px); border-radius: 50%;
+  display: grid; place-items: center; font-size: min(11cqw, 42px); font-weight: 700; color: #fff; background: var(--av, var(--accent));
+  box-shadow: 0 0 0 3px transparent; transition: box-shadow .1s;
+}
+.participant.speaking .avatar { box-shadow: 0 0 0 3px var(--av-bg, var(--bg-2)), 0 0 0 6px var(--green); }
+/* İsim ve durum: sol altta tek etiket; kameranın önünde başka bir şey durmaz */
+.p-info {
+  position: absolute; left: 8px; bottom: 8px; z-index: 1; max-width: calc(100% - 72px);
+  background: rgba(0,0,0,.55); border-radius: 6px; padding: 3px 8px 4px;
+}
+.p-name { display: flex; gap: 6px; font-weight: 600; color: var(--head); font-size: 14px; line-height: 1.3; }
+.p-name .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.p-name .you { color: #c4c9d0; font-weight: 400; }
+.p-status { font-size: 11.5px; color: #c4c9d0; display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; }
+.p-status .status-text { overflow: hidden; text-overflow: ellipsis; }
+.p-icons { position: absolute; right: 8px; bottom: 8px; z-index: 1; display: flex; gap: 4px; }
+.p-icons > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: rgba(0,0,0,.6); color: var(--red); }
+.p-icons .ic { width: 15px; height: 15px; }
+/* Dar kutularda durum satırı gizlenir, isim kalır */
+@container (max-width: 240px) { .p-status { display: none; } }
+
+/* Kamera */
+#cam-btn.on { background: var(--accent); color: #fff; }
+.participant .cam-video { display: none; position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
 .participant.has-cam .cam-video { display: block; }
-.participant.has-cam .avatar { visibility: hidden; }
+.participant.has-cam .avatar { display: none; }
 .participant .cam-video.mirror { transform: scaleX(-1); }
-.participant.has-cam .p-status { text-shadow: 0 1px 2px rgba(0,0,0,.9); color: #e3e5e8; }
-.participant.has-cam .p-volume { background: rgba(0,0,0,.55); }
-/* Konuşma çerçevesi görüntünün üstünde kalsın */
+/* Konuşma çerçevesi görüntünün üstünde */
 .participant::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 2; box-shadow: inset 0 0 0 2px transparent; transition: box-shadow .1s; }
 .participant.speaking::after { box-shadow: inset 0 0 0 2px var(--green); }
-.stage.focus .participant.has-cam { min-height: 112px; }
+
+/* Ekran izlerken kişiler altta küçük şerit */
+.stage.focus .participants { flex: none; flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; overflow-y: hidden; padding: 8px 16px 16px; }
+.stage.focus .participant { width: 200px; }
 @media (max-width: 760px) {
-  .participant.has-cam { min-height: 210px; align-content: end; }
-  .participant.has-cam .avatar { display: none; }
-  .participant.has-cam .p-info { grid-column: 1 / 3; }
+  .participants { padding: 8px; }
+  .stage.focus .participant { width: 160px; }
+}
+
+/* ---- Kişi menüsü (ses seviyesi, bende sustur) ---- */
+.side-member { position: relative; cursor: default; }
+.side-member .sm-more { opacity: 0; color: var(--muted); }
+.side-member:hover .sm-more, .side-member .sm-more:focus-visible, .side-member.menu-open .sm-more { opacity: 1; }
+.side-member.menu-open { background: var(--bg-4); color: var(--text); }
+.sm-vol { font-size: 11px; min-width: 0; color: var(--amber); font-weight: 700; }
+.sm-vol.muted-local { color: var(--red); }
+.member-menu {
+  position: fixed; z-index: 60; width: 240px; padding: 12px; border-radius: 8px; background: #111214; color: var(--text);
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+}
+.mm-title { font-weight: 700; color: var(--head); margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-label { display: flex; justify-content: space-between; align-items: center; margin: 0 0 6px; font-size: 12px; }
+.mm-label .vol-val { min-width: 0; }
+.member-menu .vol { width: 100%; }
+.mm-hint { font-size: 11.5px; color: var(--faint); margin: 2px 0 10px; }
+.mm-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font: inherit; font-size: 14px; cursor: pointer; text-align: left; }
+.mm-item:hover { background: var(--accent); color: #fff; }
+.mm-item.on { color: var(--red); }
+.mm-item.on:hover { background: var(--red-2); color: #fff; }
+.mm-item .ic { width: 18px; height: 18px; }
+@media (max-width: 760px) {
+  /* Telefonda alttan açılan panel */
+  .member-menu.sheet { left: 8px !important; right: 8px; bottom: 8px; top: auto !important; width: auto; padding: 16px; }
 }

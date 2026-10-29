@@ -37,6 +37,7 @@
     <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
     <symbol id="i-video" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z"/></symbol>
     <symbol id="i-video-off" viewBox="0 0 24 24"><path d="M15.5 13.5V8a2 2 0 0 0-2-2H9M5 6a2 2 0 0 0-2.5 2v8a2 2 0 0 0 2 2h9a2 2 0 0 0 1.6-.8M15.5 10.5l6-3.5v10l-3-1.75"/><path d="M3 3l18 18"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.8" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
   </svg>
 
@@ -238,6 +239,15 @@
 
   <div id="toast" class="toast" role="status" hidden></div>
 
+  <!-- Kişi menüsü: soldaki listede ⋯ / sağ tık (telefonda kişinin kutusuna dokun) -->
+  <div id="member-menu" class="member-menu" role="dialog" aria-label="Kullanıcı ayarları" hidden>
+    <div class="mm-title"></div>
+    <label class="mm-label" for="mm-vol"><span>Kullanıcı sesi</span><span class="vol-val num">100%</span></label>
+    <input type="range" id="mm-vol" class="vol" min="0" max="200" step="5" value="100" title="Çift tık: %100">
+    <p class="mm-hint">Sadece senin duyduğunu değiştirir. %100 üstü güçlendirir.</p>
+    <button class="mm-item local-mute" type="button"><svg class="ic"><use href="#i-speaker-off"/></svg><span>Bende sustur</span></button>
+  </div>
+
   <template id="participant-tpl">
     <div class="participant">
       <video class="cam-video" muted playsinline autoplay></video>
@@ -249,12 +259,7 @@
       <div class="p-icons">
         <span class="i-mute" title="Mikrofon kapalı" hidden><svg class="ic"><use href="#i-mic-off"/></svg></span>
         <span class="i-deaf" title="Sesi kapalı" hidden><svg class="ic"><use href="#i-head-off"/></svg></span>
-      </div>
-      <div class="p-volume" hidden>
-        <svg class="ic vol-ico" aria-hidden="true"><use href="#i-speaker"/></svg>
-        <input type="range" min="0" max="200" step="5" value="100" class="vol" aria-label="Ses seviyesi" title="Ses seviyesi (çift tık: %100)">
-        <span class="vol-val num">100%</span>
-        <button class="icon-btn small local-mute" title="Bu kişiyi sadece kendinde sustur"><svg class="ic"><use href="#i-speaker"/></svg></button>
+        <span class="i-lmute" title="Sende susturuldu" hidden><svg class="ic"><use href="#i-speaker-off"/></svg></span>
       </div>
     </div>
   </template>

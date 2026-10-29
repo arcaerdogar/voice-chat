@@ -186,9 +186,14 @@ test('uçtan uca: ses, susturma, yeniden bağlanma ve dayanıklılık', { timeou
   });
 
   await t.test('kişi sesi %200 e kadar yükseltilir, sayısal gösterge güncellenir', async () => {
+    // Ses seviyesi soldaki listedeki ⋯ menüsünden ayarlanır
+    await B.hover('.side-member:not(:first-child)');
+    await B.click('.side-member:not(:first-child) .sm-more');
+    await B.waitForSelector('#member-menu:not([hidden])');
+    assert.equal(await B.textContent('#member-menu .mm-title'), 'Ahri');
     const setVol = (v) =>
       B.evaluate((v) => {
-        const r = document.querySelector('.participant:not(:first-child) .vol');
+        const r = document.querySelector('#member-menu .vol');
         r.value = String(v);
         r.dispatchEvent(new Event('input'));
       }, v);
@@ -200,8 +205,9 @@ test('uçtan uca: ses, susturma, yeniden bağlanma ve dayanıklılık', { timeou
           gain: p.boostGain ? p.boostGain.gain.value : null,
           audioMuted: p.audio.muted,
           audioVolume: p.audio.volume,
-          label: p.el.querySelector('.vol-val').textContent,
-          labelBoost: p.el.querySelector('.vol-val').classList.contains('boost'),
+          label: document.querySelector('#member-menu .vol-val').textContent,
+          labelBoost: document.querySelector('#member-menu .vol-val').classList.contains('boost'),
+          sideLabel: p.el.side.querySelector('.sm-vol').hidden ? null : p.el.side.querySelector('.sm-vol').textContent,
         };
       });
 
@@ -210,6 +216,7 @@ test('uçtan uca: ses, susturma, yeniden bağlanma ve dayanıklılık', { timeou
     let s = await peerState();
     assert.equal(s.label, '200%');
     assert.equal(s.labelBoost, true);
+    assert.equal(s.sideLabel, '200%', 'soldaki listede farklı ses ayarı görünmeli');
     assert.equal(s.boosted, true);
     assert.ok(Math.abs(s.gain - 2) < 0.05, 'kazanç 2 olmalı: ' + s.gain);
     assert.equal(s.audioMuted, true, '%100 üstünde ses güçlendiriciden çalmalı');
@@ -240,6 +247,10 @@ test('uçtan uca: ses, susturma, yeniden bağlanma ve dayanıklılık', { timeou
     await new Promise((r) => setTimeout(r, 300));
     assert.ok((await peerState()).gain < 0.01);
     await B.click('#deafen-btn');
+    // Menünün dışına tıklamak (kulaklık düğmesi) menüyü kapatır; tekrar aç
+    assert.equal(await B.isHidden('#member-menu'), true);
+    await B.hover('.side-member:not(:first-child)');
+    await B.click('.side-member:not(:first-child) .sm-more');
 
     // %50: normal yol, güçlendirici sessiz
     await setVol(50);
@@ -252,6 +263,15 @@ test('uçtan uca: ses, susturma, yeniden bağlanma ve dayanıklılık', { timeou
     assert.equal(s.audioVolume, 0.5);
     assert.ok(s.gain < 0.01);
     await setVol(100);
+    assert.equal((await peerState()).sideLabel, null, '%100 iken etiket gizli');
+    // Bende sustur menüden
+    await B.click('#member-menu .local-mute');
+    assert.equal(await B.evaluate(() => [...window.__rv.peers.values()][0].audio.muted), true);
+    assert.equal((await peerState()).sideLabel, 'susturuldu');
+    await B.click('#member-menu .local-mute');
+    assert.equal(await B.evaluate(() => [...window.__rv.peers.values()][0].audio.muted), false);
+    await B.keyboard.press('Escape');
+    assert.equal(await B.isHidden('#member-menu'), true);
   });
 
   await t.test('sohbet mesajı iletilir', async () => {

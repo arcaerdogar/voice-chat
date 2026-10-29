@@ -212,12 +212,14 @@
     el.querySelector('.initial').textContent = (name || '?').trim().charAt(0).toUpperCase();
     el.querySelector('.name').textContent = name;
     el.querySelector('.you').hidden = !isSelf;
-    if (!isSelf) el.querySelector('.p-volume').hidden = false;
     paintAvatar(el, name);
     // Sol paneldeki kişi listesi öğesi (Discord'daki sesli kanal altındaki liste gibi)
     const li = document.createElement('li');
     li.className = 'side-member';
-    li.innerHTML = '<span class="avatar-sm"></span><span class="sm-name"></span><span class="sm-icons"><span class="sm-mute" hidden>' + svgIcon('mic-off') + '</span><span class="sm-deaf" hidden>' + svgIcon('head-off') + '</span></span>';
+    li.innerHTML =
+      '<span class="avatar-sm"></span><span class="sm-name"></span><span class="sm-vol" hidden></span><span class="sm-icons"><span class="sm-mute" hidden>' +
+      svgIcon('mic-off') + '</span><span class="sm-deaf" hidden>' + svgIcon('head-off') + '</span></span>' +
+      (isSelf ? '' : '<button class="icon-btn small sm-more" type="button" title="Kullanıcı ayarları (ses seviyesi)">' + svgIcon('more') + '</button>');
     li.querySelector('.avatar-sm').textContent = (name || '?').trim().charAt(0).toUpperCase();
     li.querySelector('.sm-name').textContent = name;
     paintAvatar(li, name);
@@ -225,6 +227,96 @@
     else $('#side-members').appendChild(li);
     el.side = li;
     return el;
+  }
+
+  // ---- Kişi menüsü ----
+  let menuPeer = null;
+
+  function openMemberMenu(p, anchor) {
+    if (menuPeer && menuPeer.el && menuPeer.el.side) menuPeer.el.side.classList.remove('menu-open');
+    menuPeer = p;
+    const m = $('#member-menu');
+    m.querySelector('.mm-title').textContent = p.name;
+    m.querySelector('.vol').value = p.volume;
+    renderMemberMenu();
+    m.hidden = false;
+    if (p.el.side) p.el.side.classList.add('menu-open');
+    if (window.innerWidth <= 760) {
+      m.classList.add('sheet');
+      return;
+    }
+    m.classList.remove('sheet');
+    const w = m.offsetWidth;
+    const h = m.offsetHeight;
+    let x = anchor.right + 8;
+    if (x + w > window.innerWidth - 8) x = anchor.left - w - 8;
+    let y = anchor.top;
+    if (y + h > window.innerHeight - 8) y = window.innerHeight - h - 8;
+    m.style.left = Math.max(8, x) + 'px';
+    m.style.top = Math.max(8, y) + 'px';
+  }
+
+  function toggleMemberMenu(p, anchor) {
+    if (menuPeer === p && !$('#member-menu').hidden) closeMemberMenu();
+    else openMemberMenu(p, anchor);
+  }
+
+  function closeMemberMenu() {
+    $('#member-menu').hidden = true;
+    if (menuPeer && menuPeer.el && menuPeer.el.side) menuPeer.el.side.classList.remove('menu-open');
+    menuPeer = null;
+  }
+
+  function renderMemberMenu() {
+    const p = menuPeer;
+    if (!p) return;
+    const m = $('#member-menu');
+    const v = m.querySelector('.vol-val');
+    v.textContent = p.volume + '%';
+    v.classList.toggle('boost', p.volume > 100);
+    const lm = m.querySelector('.local-mute');
+    lm.classList.toggle('on', p.localMuted);
+    lm.querySelector('span').textContent = p.localMuted ? 'Susturmayı kaldır' : 'Bende sustur';
+  }
+
+  function setPeerVolume(p, v) {
+    p.volume = v;
+    store.set('vol:' + p.name, v);
+    applyPeerAudio(p);
+    renderSideVol(p);
+    renderMemberMenu();
+  }
+
+  /** Soldaki listede varsayılandan farklı ses ayarını göster (ör. 150%, susturuldu) */
+  function renderSideVol(p) {
+    const el = p.el && p.el.side && p.el.side.querySelector('.sm-vol');
+    if (!el) return;
+    el.hidden = !p.localMuted && p.volume === 100;
+    el.textContent = p.localMuted ? 'susturuldu' : p.volume + '%';
+    el.classList.toggle('muted-local', p.localMuted);
+  }
+
+  // ---- Kutu düzeni: 16:9 kutular sahneyi dolduracak en büyük boyutta, ortalı ----
+  function layoutTiles() {
+    const box = $('#participants');
+    if (!box || $('#room-view').hidden) return;
+    if ($('.stage').classList.contains('focus')) return box.style.removeProperty('--tile-w');
+    const n = box.children.length;
+    if (!n) return;
+    const cs = getComputedStyle(box);
+    const W = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const H = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    const gap = 8;
+    const ratio = 16 / 9;
+    let best = 0;
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols);
+      const w = Math.min((W - gap * (cols - 1)) / cols, ((H - gap * (rows - 1)) / rows) * ratio);
+      if (w > best) best = w;
+    }
+    // Çok küçülürse (çok kişi / dar ekran) en az bu genişlikte kalsın, sahne kaydırılır
+    best = Math.max(best, Math.min(W, 180));
+    box.style.setProperty('--tile-w', Math.floor(best) + 'px');
   }
 
   function renderSide(el, { name, muted, deafened, offline, sharing }) {
@@ -314,9 +406,9 @@
     } else {
       setCardStatus(p.el, 'warn', 'Bağlanıyor…');
     }
-    const lm = p.el.querySelector('.local-mute');
-    lm.classList.toggle('on', p.localMuted);
-    lm.innerHTML = svgIcon(p.localMuted ? 'speaker-off' : 'speaker');
+    p.el.querySelector('.i-lmute').hidden = !p.localMuted;
+    renderSideVol(p);
+    if (menuPeer === p) renderMemberMenu();
     renderSide(p.el, { name: p.name, muted: p.muted, deafened: p.deafened, offline: !p.online, sharing: p.sharing });
     refreshCam(p);
   }
@@ -916,27 +1008,23 @@
       };
       S.peers.set(p.id, p);
       p.el = makeCard(p.name, false);
-      const vol = p.el.querySelector('.vol');
-      const volVal = p.el.querySelector('.vol-val');
-      vol.value = p.volume;
-      volVal.textContent = p.volume + '%';
-      volVal.classList.toggle('boost', p.volume > 100);
-      vol.ondblclick = () => {
-        // çift tık: %100'e döndür
-        vol.value = 100;
-        vol.oninput();
+      // Kişi menüsü (ses seviyesi, bende sustur): soldaki listede ⋯ ya da sağ tık; telefonda kutuya dokun
+      const li = p.el.side;
+      li.querySelector('.sm-more').onclick = (e) => {
+        e.stopPropagation();
+        toggleMemberMenu(p, li.getBoundingClientRect());
       };
-      vol.oninput = () => {
-        p.volume = Number(vol.value);
-        volVal.textContent = p.volume + '%';
-        volVal.classList.toggle('boost', p.volume > 100);
-        store.set('vol:' + p.name, p.volume);
-        applyPeerAudio(p);
+      const atPointer = (e) => {
+        e.preventDefault();
+        openMemberMenu(p, { left: e.clientX, right: e.clientX, top: e.clientY });
       };
-      p.el.querySelector('.local-mute').onclick = () => {
-        p.localMuted = !p.localMuted;
-        applyPeerAudio(p);
-        renderPeer(p);
+      li.oncontextmenu = atPointer;
+      p.el.oncontextmenu = atPointer;
+      p.el.onclick = (e) => {
+        if (window.innerWidth <= 760) {
+          e.stopPropagation();
+          openMemberMenu(p, p.el.getBoundingClientRect());
+        }
       };
       $('#participants').appendChild(p.el);
       updateCount();
@@ -981,6 +1069,7 @@
       p.el.remove();
     }
     if (p.screenEl) p.screenEl.remove();
+    if (menuPeer === p) closeMemberMenu();
     S.peers.delete(p.id);
     renderScreens();
     updateCount();
@@ -1675,6 +1764,7 @@
     stage.classList.toggle('has-screens', tiles > 0);
     stage.classList.toggle('focus', watched > 0);
     renderSelf();
+    layoutTiles();
   }
 
   function publishState() {
@@ -2679,6 +2769,29 @@
       }
     };
     $('#invite-btn').onclick = () => $('#copy-link').click();
+    // Kişi menüsü
+    const mm = $('#member-menu');
+    const mmVol = mm.querySelector('.vol');
+    mmVol.oninput = () => menuPeer && setPeerVolume(menuPeer, Number(mmVol.value));
+    mmVol.ondblclick = () => {
+      mmVol.value = 100;
+      mmVol.oninput();
+    };
+    mm.querySelector('.local-mute').onclick = () => {
+      if (!menuPeer) return;
+      menuPeer.localMuted = !menuPeer.localMuted;
+      applyPeerAudio(menuPeer);
+      renderPeer(menuPeer);
+    };
+    document.addEventListener('mousedown', (e) => {
+      if (!mm.hidden && !mm.contains(e.target) && !e.target.closest('.sm-more')) closeMemberMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !mm.hidden) closeMemberMenu();
+    });
+    // Kutu düzeni: sahne boyutu ya da kişi sayısı değişince
+    if (window.ResizeObserver) new ResizeObserver(() => layoutTiles()).observe($('#participants'));
+    new MutationObserver(() => layoutTiles()).observe($('#participants'), { childList: true });
     $('#share-btn').onclick = () => (S.screen ? stopShare() : startShare());
     $('#cam-btn').onclick = () => (S.cam ? stopCam() : startCam());
     renderSelfCam();
