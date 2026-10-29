@@ -800,11 +800,16 @@
         console.error('mesaj işlenemedi', m && m.t, err);
       }
     };
-    ws.onclose = () => {
+    ws.onclose = (e) => {
       clearTimeout(openTimeout);
       if (S.ws !== ws) return;
       S.ws = null;
       stopPing();
+      // Yönetici çıkardı (4001) ya da engelledi (4003): geri bağlanma
+      if (e && (e.code === 4001 || e.code === 4003)) {
+        onKicked(e.code === 4003 ? 'Bu sunucuya girişin yönetici tarafından engellendi.' : 'Yönetici tarafından kanaldan çıkarıldın.');
+        return;
+      }
       scheduleReconnect();
     };
     ws.onerror = () => {};
@@ -873,7 +878,17 @@
         onSignal(m.from, m.data);
         break;
       case 'chat':
-        chatAppend(m.name, m.text, m.ts, false);
+        if (m.admin) {
+          chatAppend('', '📢 Yönetici: ' + m.text, 0, true);
+          toast('📢 ' + m.text, 5000);
+        } else chatAppend(m.name, m.text, m.ts, false);
+        break;
+      case 'kicked':
+        onKicked(m.message);
+        break;
+      case 'admin-mute':
+        if (S.track && !S.muted && !S.deafened) toggleMute();
+        toast('Yönetici seni susturdu. Mikrofonunu tekrar açabilirsin.', 4000);
         break;
       case 'music':
         onMusic(m);
@@ -890,6 +905,25 @@
       default:
         break;
     }
+  }
+
+  /** Yönetici tarafından çıkarıldı/engellendi: odadan çık, sebebini göster, geri bağlanma */
+  function onKicked(message) {
+    if (!S.joined) return;
+    leaveRoom(false);
+    showJoinError(message || 'Kanaldan çıkarıldın.');
+  }
+
+  /** Bağlantı kalitesini sunucuya bildir (sadece yönetici panelinde görünür) */
+  function reportStats() {
+    if (!S.joined || !S.ws) return;
+    const peers = [...S.peers.values()].map((p) => ({
+      id: p.id,
+      state: p.pc ? p.pc.connectionState : 'none',
+      rtt: p.rtt,
+      relay: !!p.relay,
+    }));
+    wsSend({ t: 'stats', peers });
   }
 
   function onServerError(m) {
@@ -2956,6 +2990,7 @@
     setInterval(watchdog, 2000);
     setInterval(remoteLevels, 100);
     setInterval(collectStats, 3000);
+    setInterval(reportStats, 10000);
     refreshDevices();
   }
 

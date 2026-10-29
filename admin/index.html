@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Yankı · Yönetim</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/admin/admin.css">
+</head>
+<body>
+  <!-- Giriş -->
+  <section id="login-view" class="login" hidden>
+    <form id="login-form" class="login-card" autocomplete="on">
+      <img src="/favicon.svg" alt="" width="48" height="48">
+      <h1>Yönetim paneli</h1>
+      <label for="l-user">Kullanıcı adı</label>
+      <input id="l-user" name="username" autocomplete="username" required>
+      <label for="l-pass">Şifre</label>
+      <input id="l-pass" name="password" type="password" autocomplete="current-password" required>
+      <p id="login-error" class="error" hidden></p>
+      <button class="btn primary big" type="submit">Giriş yap</button>
+    </form>
+  </section>
+
+  <!-- Panel -->
+  <section id="app-view" hidden>
+    <header class="top">
+      <div class="brand"><img src="/favicon.svg" alt="" width="28" height="28"><strong>Yankı</strong><span class="muted">Yönetim</span></div>
+      <div class="top-right">
+        <span id="live" class="live" title="Veriler 2 sn'de bir yenilenir">● Canlı</span>
+        <span id="who" class="muted"></span>
+        <button id="logout" class="btn ghost small" type="button">Çıkış</button>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="stats" id="stats"></section>
+
+      <section class="toolbar">
+        <input id="search" placeholder="İsim, IP ya da kanal ara…" aria-label="Ara">
+        <form id="announce-form" class="announce" autocomplete="off">
+          <select id="announce-room" aria-label="Duyuru hedefi"><option value="">Tüm kanallar</option></select>
+          <input id="announce-text" maxlength="300" placeholder="Duyuru yaz (kanaldakilere sistem mesajı olarak gider)">
+          <button class="btn primary" type="submit">Duyur</button>
+        </form>
+      </section>
+
+      <h2>Kanallar</h2>
+      <div id="rooms" class="rooms"></div>
+
+      <div class="cols">
+        <section>
+          <h2>Yasaklı IP'ler</h2>
+          <div id="bans" class="panel"></div>
+        </section>
+        <section>
+          <h2>Olay günlüğü <span class="muted small">(son 150; sunucu yeniden başlayınca sıfırlanır)</span></h2>
+          <div class="log-filter">
+            <label><input type="checkbox" data-type="join" checked> Katılma</label>
+            <label><input type="checkbox" data-type="leave" checked> Ayrılma</label>
+            <label><input type="checkbox" data-type="admin" checked> Yönetim</label>
+          </div>
+          <ol id="events" class="panel events"></ol>
+        </section>
+      </div>
+    </main>
+  </section>
+
+  <!-- Yasaklama penceresi -->
+  <dialog id="ban-dialog" class="dialog">
+    <form method="dialog" id="ban-form">
+      <h3>Yasakla: <span id="ban-name"></span></h3>
+      <p class="muted">IP: <code id="ban-ip"></code> — bu IP'deki herkes çıkarılır ve süre boyunca giremez.</p>
+      <label for="ban-minutes">Süre</label>
+      <select id="ban-minutes">
+        <option value="15">15 dakika</option>
+        <option value="60" selected>1 saat</option>
+        <option value="1440">1 gün</option>
+        <option value="10080">1 hafta</option>
+        <option value="0">Kalıcı</option>
+      </select>
+      <label for="ban-reason">Sebep (isteğe bağlı)</label>
+      <input id="ban-reason" maxlength="200">
+      <div class="dialog-actions">
+        <button class="btn ghost" value="cancel" type="submit">Vazgeç</button>
+        <button class="btn danger" value="ok" type="submit">Yasakla</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/admin/admin.js"></script>
+</body>
+</html>

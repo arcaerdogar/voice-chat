@@ -14,6 +14,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 const { Readable } = require('stream');
 const { createYouTube, parseYouTubeId, parseSoundCloudUrl, looksLikeUrl, cleanTitle } = require('./sources');
 const { createYtDlp } = require('./ytdlp');
+const { createAdmin } = require('./admin');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -89,6 +90,34 @@ function youtubeErrorText(code) {
   return 'YouTube hatası' + (code != null ? ' ' + code : '');
 }
 
+const IP_RE = /^[0-9a-fA-F:.]{3,45}$/;
+
+/** Yerel/özel ağ adresi mi (nginx aynı makinede, Docker köprüsü 172.x) */
+function isPrivateAddr(a) {
+  return /^(::1$|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|fc|fd|fe80)/i.test(a);
+}
+
+/**
+ * İstemcinin gerçek IP'si ve ülkesi. Cloudflare + nginx arkasında bağlantı nginx'ten (yerel ağ) gelir;
+ * o zaman Cloudflare'in CF-Connecting-IP / X-Forwarded-For başlıkları kullanılır. Dışarıdan doğrudan
+ * gelen bağlantılarda başlıklar YOK SAYILIR (sahte IP gösterilemesin). TRUST_PROXY=all her durumda güvenir.
+ */
+function clientInfo(req, env) {
+  const remote = String((req.socket && req.socket.remoteAddress) || '').replace(/^::ffff:/, '');
+  const trust = env.TRUST_PROXY === 'all' || (env.TRUST_PROXY !== 'none' && isPrivateAddr(remote));
+  let ip = remote;
+  let country = null;
+  if (trust) {
+    const cf = String(req.headers['cf-connecting-ip'] || '').trim();
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const xr = String(req.headers['x-real-ip'] || '').trim();
+    ip = [cf, xff, xr].find((v) => v && IP_RE.test(v)) || remote;
+    const c = String(req.headers['cf-ipcountry'] || '').trim().toUpperCase();
+    if (/^[A-Z]{2}$/.test(c) && c !== 'XX') country = c;
+  }
+  return { ip: ip.replace(/^::ffff:/, ''), country };
+}
+
 function createServer(options = {}) {
   const env = options.env || process.env;
   const maxRoomSize = options.maxRoomSize || Number(env.MAX_ROOM_SIZE) || 12;
@@ -114,6 +143,26 @@ function createServer(options = {}) {
         : createYtDlp({ bin: env.YTDLP_BIN || 'yt-dlp', cookies: env.YTDLP_COOKIES || null, log });
   let streamOn = false;
   const streamReady = ytdlp ? Promise.resolve(ytdlp.available()).then((ok) => (streamOn = !!ok)) : Promise.resolve(false);
+  // ---- Yönetim (admin paneli) için durum ----
+  const startedAt = Date.now();
+  const roomMeta = new Map(); // oda → { createdAt, locked }
+  const bans = new Map(); // ip → { until (0 = kalıcı), reason, by, at }
+  const events = []; // son olaylar (bellekte)
+  function logEvent(type, text) {
+    events.push({ ts: Date.now(), type, text });
+    if (events.length > 300) events.splice(0, events.length - 300);
+    log(`[${type}] ${text}`);
+  }
+  function banOf(ip) {
+    const b = ip && bans.get(ip);
+    if (!b) return null;
+    if (b.until && b.until < Date.now()) {
+      bans.delete(ip);
+      return null;
+    }
+    return b;
+  }
+
   /** Akış izni: kişiye özel anahtar → üye */
   const streamTokens = new Map();
   const musicStartDelay = options.musicStartDelayMs ?? MUSIC_START_DELAY_MS;
@@ -371,6 +420,15 @@ function createServer(options = {}) {
       return;
     }
 
+    if (pathname === '/admin' || pathname.startsWith('/admin/')) {
+      admin.handle(req, res, pathname, clientInfo(req, env).ip).catch((err) => {
+        log('admin', err);
+        if (!res.headersSent) res.writeHead(500);
+        res.end();
+      });
+      return;
+    }
+
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405);
       res.end();
@@ -429,7 +487,7 @@ function createServer(options = {}) {
     }
   }
 
-  function removeMember(roomName, id) {
+  function removeMember(roomName, id, reason) {
     const room = rooms.get(roomName);
     if (!room) return;
     const m = room.get(id);
@@ -437,8 +495,10 @@ function createServer(options = {}) {
     clearTimeout(m.graceTimer);
     streamTokens.delete(m.streamToken);
     room.delete(id);
+    logEvent('leave', `${m.name} "${roomName}" kanalından ayrıldı${reason ? ' (' + reason + ')' : ''}`);
     if (room.size === 0) {
       rooms.delete(roomName);
+      roomMeta.delete(roomName);
       const m = music.get(roomName);
       if (m) clearTimeout(m.endTimer);
       music.delete(roomName);
@@ -449,6 +509,10 @@ function createServer(options = {}) {
 
   wss.on('connection', (ws, req) => {
     ws.isAlive = true;
+    const info = clientInfo(req, env);
+    ws.ip = info.ip;
+    ws.country = info.country;
+    ws.ua = String(req.headers['user-agent'] || '').slice(0, 300);
     ws.on('pong', () => {
       ws.isAlive = true;
     });
@@ -471,6 +535,7 @@ function createServer(options = {}) {
       }
       if (++windowCount > 200) return;
 
+      if (member && member.ws === ws) member.lastSeen = now;
       let msg;
       try {
         msg = JSON.parse(raw.toString());
@@ -492,6 +557,15 @@ function createServer(options = {}) {
             send(ws, { t: 'error', code: 'bad-join', message: 'Geçersiz oda adı veya kullanıcı adı.' });
             return;
           }
+          const ban = banOf(ws.ip);
+          if (ban) {
+            const left = ban.until ? ` (${Math.ceil((ban.until - Date.now()) / 60000)} dk)` : '';
+            send(ws, { t: 'error', code: 'banned', message: `Bu sunucuya girişin yönetici tarafından engellendi${left}.` });
+            try {
+              ws.close(4003, 'banned');
+            } catch {}
+            return;
+          }
           // Bu soket daha önce başka bir odaya katıldıysa oradan çıkar.
           if (member && (member.room !== roomName || member.id !== id)) {
             removeMember(member.room, member.id);
@@ -500,6 +574,10 @@ function createServer(options = {}) {
 
           let room = rooms.get(roomName);
           const existing = room && room.get(id);
+          if (!existing && room && roomMeta.get(roomName) && roomMeta.get(roomName).locked) {
+            send(ws, { t: 'error', code: 'room-locked', message: 'Bu kanal yönetici tarafından kilitlendi; şu an yeni kimse giremez.' });
+            return;
+          }
           if (!existing && room && room.size >= maxRoomSize) {
             send(ws, { t: 'error', code: 'room-full', message: `Oda dolu (en fazla ${maxRoomSize} kişi).` });
             return;
@@ -507,6 +585,7 @@ function createServer(options = {}) {
           if (!room) {
             room = new Map();
             rooms.set(roomName, room);
+            roomMeta.set(roomName, { createdAt: Date.now(), locked: false });
           }
 
           if (existing) {
@@ -529,6 +608,12 @@ function createServer(options = {}) {
             existing.deafened = !!msg.deafened;
             existing.sharing = !!msg.sharing;
             existing.camera = !!msg.camera;
+            existing.ip = ws.ip;
+            existing.country = ws.country;
+            existing.ua = ws.ua;
+            existing.connectedAt = Date.now();
+            existing.lastSeen = Date.now();
+            existing.reconnects = (existing.reconnects || 0) + 1;
             member = existing;
             broadcast(roomName, { t: 'peer-state', ...publicMember(existing) }, id);
             log(`rejoin room=${roomName} id=${id}`);
@@ -545,11 +630,19 @@ function createServer(options = {}) {
               ws,
               graceTimer: null,
               streamToken: crypto.randomBytes(16).toString('hex'),
+              ip: ws.ip,
+              country: ws.country,
+              ua: ws.ua,
+              joinedAt: Date.now(),
+              connectedAt: Date.now(),
+              lastSeen: Date.now(),
+              reconnects: 0,
+              chatCount: 0,
             };
             streamTokens.set(member.streamToken, member);
             room.set(id, member);
             broadcast(roomName, { t: 'peer-joined', peer: publicMember(member) }, id);
-            log(`join room=${roomName} id=${id} size=${room.size}`);
+            logEvent('join', `${name} "${roomName}" kanalına katıldı (${ws.ip}${ws.country ? ', ' + ws.country : ''})`);
           }
 
           const peers = [];
@@ -593,8 +686,22 @@ function createServer(options = {}) {
           chatTimes = chatTimes.filter((t) => now - t < 5000);
           if (chatTimes.length >= 8) return;
           chatTimes.push(now);
+          member.chatCount = (member.chatCount || 0) + 1;
           const out = { t: 'chat', from: member.id, name: member.name, text, ts: now };
           broadcast(member.room, out);
+          return;
+        }
+
+        case 'stats': {
+          // İstemci 10 sn'de bir diğer kişilerle bağlantı durumunu bildirir (sadece yönetici panelinde gösterilir)
+          if (!member || member.ws !== ws || !Array.isArray(msg.peers)) return;
+          member.peerStats = msg.peers.slice(0, 20).map((p) => ({
+            id: typeof p.id === 'string' ? p.id.slice(0, 64) : '',
+            state: typeof p.state === 'string' ? p.state.slice(0, 20) : '',
+            rtt: Number.isFinite(p.rtt) ? Math.round(p.rtt) : null,
+            relay: !!p.relay,
+          }));
+          member.statsAt = now;
           return;
         }
 
@@ -830,6 +937,131 @@ function createServer(options = {}) {
   streamReady.then(() => {
     if (streamOn) for (const roomName of music.keys()) broadcastMusic(roomName, null);
   });
+
+  // ---- Yönetici işlemleri (admin.js kullanır) ----
+  function findMember(roomName, id) {
+    const room = rooms.get(roomName);
+    return (room && room.get(id)) || null;
+  }
+
+  /** Kişiyi çıkar: önce sebebini bildir, sonra bağlantısını kapat (otomatik geri bağlanmaz) */
+  function kickMember(roomName, id, message, by) {
+    const m = findMember(roomName, id);
+    if (!m) throw new Error('kişi bulunamadı');
+    const ws = m.ws;
+    m.ws = null; // kapanış olayı "kısa kopma" sayılmasın
+    if (ws) {
+      send(ws, { t: 'kicked', message });
+      setTimeout(() => {
+        try {
+          ws.close(4001, 'kicked');
+        } catch {}
+      }, 50);
+    }
+    removeMember(roomName, id, 'yönetici çıkardı');
+    logEvent('admin', `${by}: ${m.name} "${roomName}" kanalından çıkarıldı`);
+    return { name: m.name };
+  }
+
+  function banIp(ip, minutes, reason, by) {
+    if (!IP_RE.test(ip)) throw new Error('geçersiz IP');
+    bans.set(ip, { until: minutes > 0 ? Date.now() + minutes * 60000 : 0, reason: reason || '', by, at: Date.now() });
+    // Bu IP'deki herkesi çıkar
+    let kicked = 0;
+    for (const [roomName, room] of rooms) {
+      for (const m of [...room.values()]) {
+        if (m.ip === ip) {
+          kickMember(roomName, m.id, 'Yönetici tarafından sunucudan uzaklaştırıldın.', by);
+          kicked++;
+        }
+      }
+    }
+    logEvent('admin', `${by}: ${ip} yasaklandı (${minutes > 0 ? minutes + ' dk' : 'kalıcı'})${reason ? ' — ' + reason : ''}`);
+    return { kicked };
+  }
+
+  function unbanIp(ip, by) {
+    if (!bans.delete(ip)) throw new Error('yasak bulunamadı');
+    logEvent('admin', `${by}: ${ip} yasağı kaldırıldı`);
+  }
+
+  function muteMember(roomName, id, by) {
+    const m = findMember(roomName, id);
+    if (!m) throw new Error('kişi bulunamadı');
+    m.muted = true;
+    if (m.ws) send(m.ws, { t: 'admin-mute' });
+    broadcast(roomName, { t: 'peer-state', ...publicMember(m) }, m.id);
+    logEvent('admin', `${by}: ${m.name} susturuldu`);
+  }
+
+  function lockRoom(roomName, locked, by) {
+    const meta = roomMeta.get(roomName);
+    if (!meta) throw new Error('kanal bulunamadı');
+    meta.locked = locked;
+    broadcast(roomName, { t: 'chat', from: 'admin', admin: true, name: 'Yönetici', text: locked ? 'Kanal kilitlendi; yeni kimse giremez.' : 'Kanalın kilidi açıldı.', ts: Date.now() });
+    logEvent('admin', `${by}: "${roomName}" ${locked ? 'kilitlendi' : 'kilidi açıldı'}`);
+  }
+
+  function closeRoom(roomName, by) {
+    const room = rooms.get(roomName);
+    if (!room) throw new Error('kanal bulunamadı');
+    let n = 0;
+    for (const m of [...room.values()]) {
+      kickMember(roomName, m.id, 'Kanal yönetici tarafından kapatıldı.', by);
+      n++;
+    }
+    logEvent('admin', `${by}: "${roomName}" kapatıldı (${n} kişi çıkarıldı)`);
+    return { kicked: n };
+  }
+
+  function musicControl(roomName, what, by) {
+    const m = music.get(roomName);
+    if (!m || (!m.current && !m.queue.length)) throw new Error('çalan müzik yok');
+    if (what === 'skip') {
+      advance(roomName, 'skip');
+      broadcastMusic(roomName, '⏭️ Yönetici şarkıyı geçti');
+    } else {
+      m.queue = [];
+      m.current = null;
+      scheduleMusicEnd(roomName);
+      broadcastMusic(roomName, '⏹️ Yönetici müziği durdurdu');
+    }
+    logEvent('admin', `${by}: "${roomName}" müzik ${what === 'skip' ? 'geçildi' : 'durduruldu'}`);
+  }
+
+  function announce(roomName, text, by) {
+    const targets = roomName ? [roomName] : [...rooms.keys()];
+    for (const r of targets) broadcast(r, { t: 'chat', from: 'admin', admin: true, name: 'Yönetici', text, ts: Date.now() });
+    logEvent('admin', `${by}: duyuru (${roomName ? '"' + roomName + '"' : 'tüm kanallar'}): ${text}`);
+    return { rooms: targets.length };
+  }
+
+  const admin = createAdmin(
+    {
+      log,
+      logEvent,
+      rooms,
+      roomMeta,
+      music,
+      bans,
+      events,
+      startedAt,
+      maxRoomSize,
+      turnConfigured: !!env.TURN_URLS,
+      streamOn: () => streamOn,
+      socketCount: () => wss.clients.size,
+      findMember,
+      kickMember,
+      banIp,
+      unbanIp,
+      muteMember,
+      lockRoom,
+      closeRoom,
+      musicControl,
+      announce,
+    },
+    env
+  );
 
   return { server, wss, rooms, close, musicForTest: (room) => music.get(room), streamReady };
 }

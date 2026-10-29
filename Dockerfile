@@ -14,7 +14,8 @@ ENV YTDLP_BIN=/opt/ytdlp/bin/yt-dlp \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY server.js sources.js ytdlp.js ./
+COPY server.js sources.js ytdlp.js admin.js ./
+COPY admin ./admin
 COPY public ./public
 USER node
 ENV PORT=3000

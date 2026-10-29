@@ -15,7 +15,8 @@
     "test:sources": "node --test test/sources.test.js",
     "test:stream": "node --test test/stream.test.js",
     "test:screen": "node --test test/screen.test.js",
-    "test:camera": "node --test test/camera.test.js"
+    "test:camera": "node --test test/camera.test.js",
+    "test:admin": "node --test test/admin.test.js"
   },
   "engines": {
     "node": ">=18"

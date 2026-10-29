@@ -13,6 +13,9 @@ services:
       - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:-}
       - MUSIC_REGION=${MUSIC_REGION:-TR}
       - MUSIC_STREAM=${MUSIC_STREAM:-auto}
+      # Yönetici paneli (/admin): ikisi de .env'de tanımlıysa açılır; şifre en az 10 karakter
+      - ADMIN_USER=${ADMIN_USER:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       # YouTube sunucuyu bot sanarsa: tarayıcıdan alınan çerezleri data/youtube-cookies.txt olarak koyun
       - YTDLP_COOKIES=/data/youtube-cookies.txt
     volumes:

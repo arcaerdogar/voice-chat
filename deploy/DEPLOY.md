@@ -156,6 +156,27 @@ Notlar:
 - Diğer sitelerdeki "statik dosyaları 1 yıl önbellekle" kuralını bu siteye eklemeyin: dosya adları sabit
   olduğu için güncellemelerden sonra tarayıcılar eski kodu çalıştırmaya devam eder.
 
+## Yönetici paneli (/admin)
+
+Kanalları, içindekileri (IP, ülke, cihaz, bağlantı kalitesi) anlık gösterir; atma, IP yasaklama,
+susturma, kanal kilitleme/kapatma, müzik kontrolü ve duyuru yapılabilir. Uygulamada linki yoktur.
+
+```bash
+cd /opt/voice-chat
+echo "ADMIN_USER=arca" | sudo tee -a .env > /dev/null
+echo "ADMIN_PASSWORD=$(openssl rand -base64 18)" | sudo tee -a .env > /dev/null
+sudo grep ADMIN_ .env          # şifreyi buradan görün ve bir yere kaydedin
+sudo docker compose up -d
+```
+Sonra: https://voicechat.ituacm.com/admin
+
+- `ADMIN_USER` ya da `ADMIN_PASSWORD` yoksa (veya şifre 10 karakterden kısaysa) panel tamamen kapalıdır, `/admin` 404 döner.
+- Aynı IP'den 5 yanlış denemede giriş 15 dk kilitlenir. Oturum 12 saat sürer.
+- IP adresleri Cloudflare'in `CF-Connecting-IP` başlığından okunur; bu başlığa sadece yerel ağdan (nginx/Docker) gelen
+  bağlantılarda güvenilir.
+- IP ve olay günlüğü sadece bellekte tutulur; diske yazılmaz, sunucu yeniden başlayınca silinir (yasaklar da).
+- Ek güvenlik isterseniz nginx'te `/admin`'i kendi IP'nizle sınırlayabilir ya da Cloudflare Access ile koruyabilirsiniz.
+
 ## Sorun giderme
 - **Bir kişinin kartı "Bağlantı kurulamıyor (ağ kısıtlaması)" diyor:** TURN çalışıyor mu kontrol et (adım 6). 3478 ve 49160-49260 portlarının firewall'da açık olduğundan emin ol.
 - **Loglar:** `sudo docker logs -f riftvoice` (uygulama), `sudo docker logs -f riftvoice-turn` (TURN)
