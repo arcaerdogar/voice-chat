@@ -106,7 +106,31 @@ function createYtDlp(opts = {}) {
     return p;
   }
 
-  return { available, info, audioUrl, explain };
+  /** Şarkı adıyla arama: ilk n sonuç (hızlı, sadece liste bilgisi) */
+  async function search(q, n = 6) {
+    const out = await run(['--flat-playlist', '-j', `ytsearch${n}:${q}`], 30000);
+    return out
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          const j = JSON.parse(line);
+          if (j.live_status === 'is_live' || j.live_status === 'is_upcoming') return null;
+          return {
+            id: j.id,
+            title: String(j.title || j.id).slice(0, 120),
+            author: String(j.channel || j.uploader || '').slice(0, 60) || null,
+            duration: Number(j.duration) > 0 ? Number(j.duration) : null,
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((x) => x && /^[A-Za-z0-9_-]{11}$/.test(x.id));
+  }
+
+  return { available, info, audioUrl, explain, search };
 }
 
 /**

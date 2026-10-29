@@ -22,6 +22,14 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
 - **Yapay zekâ gürültü engelleme (RNNoise)**: hoparlörden mikrofona giren oyun efektleri, klavye, fan sesi silinir; konuşma korunur
 - **Otomatik ses eşiği**: konuşmadığın anlarda mikrofon tamamen susar (RNNoise'un konuşma algılamasıyla). Sekme arka plandayken de çalışır (AudioWorklet)
 - **Müzik botu**: YouTube / SoundCloud linki ya da (API anahtarıyla) şarkı adı ekle, odadaki herkeste aynı anda çalar. Ortak sıra, önceki şarkı, liste/tek şarkı tekrarı, son çalınanlar, duraklat/geç/durdur, kişisel müzik sesi; sohbette `/play`, `/skip`, `/prev`, `/loop`, `/stop`, `/pause`, `/resume`
+- **Sohbet** (Discord gibi ortada, görüşmenin altında; aradaki çizgi sürüklenerek boyutlanır, çift tıkla gizlenir):
+  gruplanmış mesajlar, **kalın**, *italik*, `kod`, kod bloğu, ||gizli metin||, linkler; @bahsetme (önerili, vurgulu, sesli),
+  emoji ve tepkiler, kendi mesajını silme, "yazıyor…" göstergesi, sonradan gelenler için son 100 mesaj
+- **Görsel ve dosya paylaşımı**: + düğmesi, sürükle-bırak ya da **Ctrl+V** (ekran görüntüsü). Gönderim öncesi önizleme,
+  görseller sohbette (tıklayınca büyür), video/ses oynatılır, diğer dosyalar indirme kartı olarak. Dosya başına 25 MB;
+  dosyalar tahmin edilemeyen adreslerde tutulur, 24 saat sonra ya da kanal boşalınca silinir
+- **Müzik paneli** (sağda): şarkı adıyla arayıp sonuç listesinden seçme, kapak görseli, herkes için sarılabilen ilerleme çubuğu,
+  karıştır/önceki/oynat/sonraki/tekrar, sıradakiler (kapak + süre, "sıradaki yap", çıkar), son çalınanlar
 - **Yönetici paneli** (`/admin`, linksiz; .env'deki kullanıcı/şifreyle): anlık kanallar ve kişiler (IP, ülke, cihaz, bağlantı
   kalitesi), atma, IP yasaklama, susturma, kanal kilitleme/kapatma, müzik kontrolü, duyuru, olay günlüğü
 - **Kamera**: kişinin kutusunda avatar yerine görüntüsü (640×360, 24 fps, kişi başı en fazla ~500 kbit/sn). Telefonda da çalışır; ayarlardan kamera seçilir.
@@ -132,6 +140,10 @@ Bir VPS'te HTTPS için önüne Caddy koymak en kolayıdır (`caddy reverse-proxy
 | `TURN_URLS` | (yok) | Virgülle ayrılmış TURN adresleri, ör. `turn:turn.ornek.com:3478,turns:turn.ornek.com:5349` |
 | `TURN_USERNAME` / `TURN_CREDENTIAL` | (yok) | Sabit TURN kimlik bilgileri |
 | `TURN_SECRET` | (yok) | coturn `use-auth-secret` kullanıyorsanız paylaşılan gizli anahtar (süreli kimlik bilgisi üretilir) |
+| `UPLOAD_DIR` | `./uploads` | Sohbette paylaşılan dosyaların geçici klasörü (açılışta temizlenir) |
+| `UPLOAD_MAX_MB` | `25` | Dosya başına en büyük boyut |
+| `UPLOAD_MAX_TOTAL_MB` | `2048` | Tüm dosyaların toplam disk sınırı (dolunca en eskiler silinir) |
+| `UPLOAD_TTL_HOURS` | `24` | Dosyaların saklanma süresi |
 
 ### TURN sunucusu gerekli mi?
 
@@ -148,6 +160,7 @@ npm run test:turn     # gerçek coturn (Docker) ile röle testi
 npm run test:noise    # yapay zekâ gürültü engelleme ölçümü
 npm run test:music    # gerçek YouTube/SoundCloud oynatıcısıyla müzik testi (erişilemezse atlanır)
 npm run test:admin    # yönetici paneli testleri (güvenlik + işlemler + arayüz)
+npm run test:chat     # sohbet: biçimlendirme, bahsetme, tepkiler, dosya/görsel paylaşımı, geçmiş
 npm run test:camera   # kamera testi (üç Chrome, sahte kamera)
 npm run test:screen   # ekran paylaşımı testi (üç Chrome)
 npm run test:stream   # yt-dlp ses akışı testi (YTDLP_BIN ya da PATH'te yt-dlp gerekir, yoksa atlanır)

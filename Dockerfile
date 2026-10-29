@@ -14,9 +14,12 @@ ENV YTDLP_BIN=/opt/ytdlp/bin/yt-dlp \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
-COPY server.js sources.js ytdlp.js admin.js ./
+COPY server.js sources.js ytdlp.js admin.js uploads.js ./
 COPY admin ./admin
 COPY public ./public
+# Sohbette paylaşılan dosyalar (geçici: 24 saat sonra ya da kanal boşalınca silinir)
+RUN mkdir -p /uploads && chown node:node /uploads
+ENV UPLOAD_DIR=/uploads
 USER node
 ENV PORT=3000
 EXPOSE 3000

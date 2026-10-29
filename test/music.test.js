@@ -92,7 +92,6 @@ test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yans
   const [A, B] = pages;
 
   // Ahri müzik sekmesinden ekler
-  await A.click('.side-tab[data-tab=music]');
   await A.fill('#music-input', `https://www.youtube.com/watch?v=${LONG}`);
   await A.click('#music-form button[type=submit]');
 
@@ -145,17 +144,14 @@ test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yans
   // Duraklat / devam herkese yansır
   await A.click('#m-pause');
   await until(B, (s) => s.ytState === PAUSED, 8000, 'duraklama');
-  await B.click('.side-tab[data-tab=music]');
   await B.click('#m-pause');
   await until(A, (s) => s.ytState === PLAYING, 8000, 'devam');
 
   // Sohbet komutuyla sıraya ekleme, sonra geçme
-  await B.click('.side-tab[data-tab=chat]');
   await B.fill('#chat-input', `/play https://youtu.be/${SHORT}`);
   await B.press('#chat-input', 'Enter');
   await until(A, (s) => s.queue === 1, 10000, 'sıraya ekleme');
   assert.equal(await A.locator('#music-queue li').count(), 1);
-  await A.click('.side-tab[data-tab=music]');
   await A.click('#m-skip');
   for (const p of pages) await until(p, (s) => s.id === SHORT, 10000, 'geçme');
 
@@ -177,7 +173,6 @@ test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yans
   await B.waitForFunction(() => window.__rv.music.loop === 'all');
   const loopClass = await B.getAttribute('#m-loop', 'class');
   assert.ok(loopClass.split(' ').includes('on'), 'tekrar butonu açık görünmeli: ' + loopClass + ' / mod: ' + (await B.evaluate(() => window.__rv.music.loop)));
-  await B.click('.side-tab[data-tab=music]');
   await B.click('#m-loop');
   await A.waitForFunction(() => window.__rv.music.loop === 'one');
   assert.equal(await A.getAttribute('#m-loop', 'data-mode'), 'one');
@@ -238,7 +233,6 @@ test('Müzik: SoundCloud (sadece ses), "bende kapat" ve önizleme algılama', { 
   }
   const [A, B] = pages;
 
-  await A.click('.side-tab[data-tab=music]');
   await A.fill('#music-input', SC_FULL);
   await A.click('#music-form button[type=submit]');
   for (const p of pages) {
@@ -258,7 +252,6 @@ test('Müzik: SoundCloud (sadece ses), "bende kapat" ve önizleme algılama', { 
   assert.equal(await A.locator('#player-box iframe[src*="youtube"]').count(), 0);
 
   // "Bende kapat": Brand'de oynatıcı tamamen kapanır, internet harcamaz; Ahri'de çalmaya devam eder
-  await B.click('.side-tab[data-tab=music]');
   await B.click('#m-off');
   await until(B, (s) => s.kind === null, 5000, 'oynatıcının kapanması');
   assert.match(await B.textContent('#m-off'), /sende kapalı/);

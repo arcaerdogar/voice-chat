@@ -132,7 +132,7 @@ test('SoundCloud: linkler tanınır, parça bilgisi alınır, liste/profil linkl
       url.includes('yok') ? { notFound: true } : { id: 'https://api.soundcloud.com/tracks/293', title: 'Flickermood', author: 'Forss' },
   });
   const ok = await yt.resolve('https://soundcloud.com/forss/flickermood');
-  assert.deepEqual(ok.item, { source: 'sc', id: 'https://api.soundcloud.com/tracks/293', title: 'Flickermood', author: 'Forss', duration: null });
+  assert.deepEqual(ok.item, { source: 'sc', id: 'https://api.soundcloud.com/tracks/293', title: 'Flickermood', author: 'Forss', duration: null, thumb: null });
   assert.match((await yt.resolve('https://soundcloud.com/forss/yok-boyle')).error, /bulunamadı/);
   assert.match((await yt.resolve('https://open.spotify.com/track/abc')).error, /YouTube ve SoundCloud/);
 });
