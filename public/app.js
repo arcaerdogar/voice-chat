@@ -112,7 +112,7 @@
     cam: null, // kendi kameram: { stream, track }
     camId: store.get('camId', ''),
     transmitting: false,
-    uploadMaxMB: 25,
+    unread: 0,
   };
   window.__rv = S; // hata ayıklama / testler için
 
@@ -160,892 +160,37 @@
     return d.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
   }
 
-  // =====================================================================
-  // Sohbet: gruplanmış mesajlar, biçimlendirme, @bahsetme, tepkiler, dosyalar
-  // =====================================================================
-  const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀', '💯', '🙏', '😡', '✅'];
-  const QUICK_REACTS = ['👍', '❤️', '😂', '🔥'];
-  const EMOJIS = [
-    '😀', '😂', '🤣', '😅', '😊', '😍', '😘', '😎', '🤔', '🙄', '😏', '😴', '😭', '😡', '🤯', '🥶',
-    '🥳', '😇', '🤡', '💀', '👻', '🤖', '👀', '🙈', '👍', '👎', '👏', '🙏', '💪', '🤝', '✌️', '🫡',
-    '❤️', '💔', '🔥', '💯', '✨', '🎉', '🎮', '🏆', '⚔️', '🛡️', '🎯', '🍕', '🍺', '☕', '✅', '❌',
-  ];
-  const GROUP_MS = 5 * 60 * 1000;
-  const MAX_FILES = 10;
-  const chat = {
-    msgs: new Map(), // id -> { m, el }
-    last: null, // son mesaj grubu: { from, ts, group }
-    unread: 0,
-    stuck: true, // kaydırma en altta mı
-    typers: new Map(), // id -> { name, until }
-    typingSentAt: 0,
-    pending: [], // gönderilmeyi bekleyen ekler
-    sending: false,
-    mention: null, // { start, query, items, sel }
-    welcomeHtml: '',
-    hidden: store.get('chatHidden', false),
-  };
-
-  const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
-  const reEsc = (s) => s.replace(/[.*+?^$\{}()|[\]\\]/g, '\\$&');
-  const lower = (s) => String(s).toLocaleLowerCase('tr-TR');
-
-  function fmtSize(b) {
-    if (b < 1024) return b + ' B';
-    if (b < 1048576) return (b / 1024).toFixed(b < 10240 ? 1 : 0) + ' KB';
-    return (b / 1048576).toFixed(1) + ' MB';
-  }
-
-  function fmtStamp(ts) {
-    const d = new Date(ts);
-    const t = fmtTime(ts);
-    const today = new Date();
-    if (d.toDateString() === today.toDateString()) return 'Bugün ' + t;
-    const y = new Date(today);
-    y.setDate(y.getDate() - 1);
-    if (d.toDateString() === y.toDateString()) return 'Dün ' + t;
-    return d.toLocaleDateString('tr-TR') + ' ' + t;
-  }
-
-  /** Kanalda bilinen isimler (bahsetme vurgusu ve önerileri için) */
-  function knownNames() {
-    const names = new Set([S.name]);
-    for (const p of S.peers.values()) names.add(p.name);
-    names.delete('');
-    return [...names];
-  }
-  const nameOf = (id) => (id === S.id ? S.name : (S.peers.get(id) || {}).name || 'ayrılan biri');
-
-  /** Discord benzeri biçimlendirme. Önce her şey kaçırılır; kod ve linkler yer tutucuyla korunur. */
-  function formatText(text) {
-    const slots = [];
-    const keep = (html) => '\u0000' + (slots.push(html) - 1) + '\u0000';
-    let s = String(text).replace(/\u0000/g, '');
-    s = s.replace(/```(?:[a-z0-9+#-]*\n)?([\s\S]*?)```/gi, (_, code) => keep('<pre><code>' + esc(code.replace(/^\n+|\n+$/g, '')) + '</code></pre>'));
-    s = s.replace(/`([^`\n]+)`/g, (_, code) => keep('<code>' + esc(code) + '</code>'));
-    s = s.replace(/\bhttps?:\/\/[^\s<>"']+/gi, (url) => {
-      const tail = (url.match(/[.,;:!?)*_~|]+$/) || [''])[0];
-      const u = tail ? url.slice(0, -tail.length) : url;
-      return keep('<a href="' + esc(u) + '" target="_blank" rel="noopener noreferrer">' + esc(u) + '</a>') + tail;
-    });
-    s = esc(s)
-      .replace(/\|\|([\s\S]+?)\|\|/g, '<span class="spoiler" title="Göstermek için tıkla">$1</span>')
-      .replace(/\*\*([\s\S]+?)\*\*/g, '<b>$1</b>')
-      .replace(/__([\s\S]+?)__/g, '<u>$1</u>')
-      .replace(/~~([\s\S]+?)~~/g, '<s>$1</s>')
-      .replace(/(^|[^\w*])\*(?!\s)([^*\n]+?)\*(?![\w*])/g, '$1<i>$2</i>')
-      .replace(/(^|[^\w])_(?!\s)([^_\n]+?)_(?!\w)/g, '$1<i>$2</i>');
-    const alts = knownNames()
-      .concat(['herkes', 'everyone'])
-      .sort((a, b) => b.length - a.length)
-      .map((n) => reEsc(esc(n)));
-    s = s.replace(new RegExp('@(' + alts.join('|') + ')(?![\\wçğıöşüÇĞİÖŞÜ])', 'gi'), (all, n) => {
-      const me = /^(herkes|everyone)$/i.test(n) || lower(n) === lower(esc(S.name));
-      return '<span class="mention' + (me ? ' me' : '') + '">@' + n + '</span>';
-    });
-    s = s.replace(/\n/g, '<br>');
-    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => slots[i]);
-  }
-
-  function mentionsMe(m) {
-    if (!m.text || m.from === S.id || !S.name) return false;
-    const re = new RegExp('@(' + reEsc(S.name) + '|herkes|everyone)(?![\\wçğıöşüÇĞİÖŞÜ])', 'i');
-    return re.test(m.text);
-  }
-
-  const atBottom = () => {
-    const log = $('#chat-log');
-    return log.scrollTop + log.clientHeight >= log.scrollHeight - 40;
-  };
-  function scrollChatBottom() {
-    const log = $('#chat-log');
-    log.scrollTop = log.scrollHeight;
-    chat.stuck = true;
-    $('#jump-new').hidden = true;
-  }
-
-  function trimLog() {
-    const log = $('#chat-log');
-    while (log.children.length > 400) {
-      const first = log.firstElementChild;
-      if (chat.last && chat.last.group === first) chat.last = null;
-      for (const el of first.querySelectorAll('.msg')) chat.msgs.delete(el.dataset.id);
-      first.remove();
-    }
-  }
-
-  /** Mesaj geldi: en alttaysa kaydır, değilse "yeni mesajlar" düğmesini göster */
-  function afterAppend(stick, own, quiet) {
-    trimLog();
-    if (stick || own) scrollChatBottom();
-    else if (!quiet) $('#jump-new').hidden = false;
-  }
-
-  function bumpUnread() {
-    if (!chat.hidden) return;
-    chat.unread++;
-    const b = $('#chat-badge');
-    b.textContent = chat.unread > 99 ? '99+' : chat.unread;
-    b.hidden = false;
-  }
-
-  const SYS_ICONS = { join: 'arrow-right', leave: 'arrow-left', music: 'music', admin: 'megaphone', info: 'info' };
-  /** Sistem satırı: katıldı, ayrıldı, müzik olayları, duyurular */
-  function sysLine(text, kind = 'info', ts = Date.now()) {
-    const log = $('#chat-log');
-    const stick = atBottom();
-    const div = document.createElement('div');
-    div.className = 'sys-line sys-' + kind;
-    const ic = document.createElement('span');
-    ic.className = 'sys-ic';
-    ic.innerHTML = svgIcon(SYS_ICONS[kind] || 'info');
-    const tx = document.createElement('span');
-    // Baştaki emoji yerine satırın kendi simgesi kullanılır
-    tx.textContent = String(text).replace(/^[\p{Extended_Pictographic}️‍\s]+/u, '') || text;
-    const tm = document.createElement('time');
-    tm.textContent = fmtTime(ts);
-    tm.title = fmtStamp(ts);
-    div.append(ic, tx, tm);
-    log.appendChild(div);
-    chat.last = null; // sistem satırı mesaj gruplarını böler
-    afterAppend(stick, false, true);
-  }
-
-  /** Eski arayüzle uyumlu kısa yol */
   function chatAppend(name, text, ts, sys) {
-    if (!sys) return renderMessage({ id: randomId(8), from: '', name, text, ts: ts || Date.now(), files: [], reactions: {} });
-    sysLine(text, /katıldı/.test(text) ? 'join' : /ayrıldı/.test(text) ? 'leave' : 'info', ts || Date.now());
-  }
-
-  function renderMessage(m, hist) {
-    if (m.admin) return sysLine('Yönetici: ' + m.text, 'admin', m.ts);
-    if (chat.msgs.has(m.id)) return;
     const log = $('#chat-log');
-    const stick = atBottom();
-    const own = m.from === S.id;
-    let group;
-    const last = chat.last;
-    if (last && last.from === m.from && m.from && m.ts - last.ts < GROUP_MS && last.group.isConnected) {
-      group = last.group;
+    const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    const div = document.createElement('div');
+    div.className = 'chat-msg' + (sys ? ' sys' : '');
+    if (sys) {
+      div.textContent = text;
     } else {
-      group = document.createElement('div');
-      group.className = 'msg-group';
-      const hue = avatarHue(m.name);
-      const av = document.createElement('div');
-      av.className = 'mg-av';
-      av.style.background = 'hsl(' + hue + ' 55% 45%)';
-      av.textContent = (m.name || '?').trim().charAt(0).toUpperCase();
-      const body = document.createElement('div');
-      body.className = 'mg-body';
-      const head = document.createElement('div');
-      head.className = 'mg-head';
-      const nm = document.createElement('span');
-      nm.className = 'mg-name';
-      nm.style.color = 'hsl(' + hue + ' 70% 72%)';
-      nm.textContent = m.name;
-      nm.title = 'Bahsetmek için tıkla';
-      nm.style.cursor = 'pointer';
-      nm.onclick = () => insertAtCaret('@' + m.name + ' ');
-      const tm = document.createElement('time');
-      tm.textContent = fmtStamp(m.ts);
-      head.append(nm, tm);
-      body.appendChild(head);
-      group.append(av, body);
-      log.appendChild(group);
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = name;
+      const tx = document.createElement('span');
+      tx.className = 'text';
+      tx.textContent = text;
+      const tm = document.createElement('span');
+      tm.className = 'time';
+      tm.textContent = fmtTime(ts);
+      div.append(who, tx, tm);
     }
-    chat.last = { from: m.from, ts: m.ts, group };
-
-    const el = document.createElement('div');
-    el.className = 'msg';
-    el.dataset.id = m.id;
-    const ht = document.createElement('span');
-    ht.className = 'msg-hover-time';
-    ht.textContent = fmtTime(m.ts);
-    ht.title = fmtStamp(m.ts);
-    el.appendChild(ht);
-    if (m.text) {
-      const tx = document.createElement('div');
-      tx.className = 'msg-text';
-      tx.innerHTML = formatText(m.text);
-      el.appendChild(tx);
+    log.appendChild(div);
+    while (log.children.length > 300) log.firstChild.remove();
+    if (stick) log.scrollTop = log.scrollHeight;
+    const chatHidden =
+      $('#tab-chat').classList.contains('tab-off') ||
+      (!$('#chat-panel').classList.contains('open') && getComputedStyle($('#chat-btn')).display !== 'none');
+    if (!sys && chatHidden) {
+      S.unread++;
+      const badge = $('#chat-badge');
+      badge.textContent = S.unread;
+      badge.hidden = false;
     }
-    if (m.files && m.files.length) el.appendChild(renderFiles(m.files));
-    const reacts = document.createElement('div');
-    reacts.className = 'msg-reacts';
-    el.appendChild(reacts);
-    if (m.from) el.appendChild(msgTools(m));
-    const me = mentionsMe(m);
-    if (me) el.classList.add('mention-me');
-    group.querySelector('.mg-body').appendChild(el);
-    chat.msgs.set(m.id, { m, el });
-    renderReactions(m.id);
-    afterAppend(stick, own && !hist, !!hist);
-    if (!hist && !own) {
-      bumpUnread();
-      if (me) {
-        beep([880, 1320], 0.07, 0.1);
-        if (chat.hidden || document.hidden) toast('💬 ' + m.name + ' senden bahsetti', 4000);
-      }
-    }
-  }
-
-  function removeMessage(id) {
-    const it = chat.msgs.get(id);
-    if (!it) return;
-    chat.msgs.delete(id);
-    const group = it.el.closest('.msg-group');
-    it.el.remove();
-    if (group && !group.querySelector('.msg')) {
-      if (chat.last && chat.last.group === group) chat.last = null;
-      group.remove();
-    }
-  }
-
-  function renderReactions(id) {
-    const it = chat.msgs.get(id);
-    if (!it) return;
-    const box = it.el.querySelector('.msg-reacts');
-    box.innerHTML = '';
-    const r = it.m.reactions || {};
-    for (const emoji of REACTIONS) {
-      const ids = r[emoji];
-      if (!ids || !ids.length) continue;
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'react' + (ids.includes(S.id) ? ' mine' : '');
-      b.innerHTML = '<span>' + emoji + '</span><span>' + ids.length + '</span>';
-      b.title = ids.map(nameOf).join(', ') + ' ' + emoji + ' ile tepki verdi';
-      b.onclick = () => wsSend({ t: 'chat-react', id, emoji });
-      box.appendChild(b);
-    }
-  }
-
-  function msgTools(m) {
-    const tools = document.createElement('div');
-    tools.className = 'msg-tools';
-    for (const emoji of QUICK_REACTS) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = emoji;
-      b.title = emoji + ' tepkisi';
-      b.onclick = () => wsSend({ t: 'chat-react', id: m.id, emoji });
-      tools.appendChild(b);
-    }
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.innerHTML = svgIcon('smile');
-    more.title = 'Tepki ekle';
-    more.onclick = (e) => {
-      e.stopPropagation();
-      tools.classList.add('open');
-      openEmojiPop(more, REACTIONS, (emoji) => wsSend({ t: 'chat-react', id: m.id, emoji }), true, () => tools.classList.remove('open'));
-    };
-    tools.appendChild(more);
-    if (m.from === S.id) {
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'del';
-      del.innerHTML = svgIcon('trash');
-      del.title = 'Mesajı sil';
-      del.onclick = (e) => {
-        if (e.shiftKey || confirm('Bu mesaj' + (m.files && m.files.length ? ' ve ekleri' : '') + ' herkesten silinsin mi?')) wsSend({ t: 'chat-delete', id: m.id });
-      };
-      tools.appendChild(del);
-    }
-    return tools;
-  }
-
-  // ---- ekler
-  function renderFiles(files) {
-    const wrap = document.createElement('div');
-    wrap.className = 'msg-files';
-    const imgs = files.filter((f) => f.kind === 'image');
-    if (imgs.length) {
-      const n = imgs.length === 1 ? 1 : imgs.length === 2 || imgs.length === 4 ? 2 : 3;
-      const grid = document.createElement('div');
-      grid.className = 'att-grid n' + n;
-      for (const f of imgs) grid.appendChild(attImage(f));
-      wrap.appendChild(grid);
-    }
-    for (const f of files) {
-      if (f.kind === 'video') wrap.appendChild(attVideo(f));
-      else if (f.kind === 'audio') wrap.appendChild(attFile(f, true));
-      else if (f.kind !== 'image') wrap.appendChild(attFile(f, false));
-    }
-    return wrap;
-  }
-
-  function attGone(f) {
-    const d = document.createElement('div');
-    d.className = 'att-gone';
-    d.textContent = (f.name || 'Dosya') + ' artık mevcut değil (süresi doldu)';
-    return d;
-  }
-
-  function attImage(f) {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'att-img';
-    b.title = f.name;
-    const img = document.createElement('img');
-    img.alt = f.name;
-    img.loading = 'lazy';
-    img.decoding = 'async';
-    if (f.w && f.h) {
-      img.width = f.w;
-      img.height = f.h;
-    }
-    img.onload = () => chat.stuck && scrollChatBottom();
-    img.onerror = () => b.replaceWith(attGone(f));
-    img.src = f.url;
-    b.appendChild(img);
-    b.onclick = () => openLightbox(f);
-    return b;
-  }
-
-  function attVideo(f) {
-    const v = document.createElement('video');
-    v.className = 'att-video';
-    v.controls = true;
-    v.preload = 'metadata';
-    v.src = f.url;
-    v.onloadedmetadata = () => chat.stuck && scrollChatBottom();
-    v.onerror = () => v.replaceWith(attGone(f));
-    return v;
-  }
-
-  function attFile(f, audio) {
-    const a = document.createElement(audio ? 'div' : 'a');
-    a.className = 'att-file' + (audio ? ' audio' : '');
-    if (!audio) {
-      a.href = f.url;
-      a.download = f.name;
-      a.title = 'İndir: ' + f.name;
-    }
-    a.innerHTML = svgIcon('file') + '<div class="af-info"><span class="af-name"></span><span class="af-size"></span></div>' + (audio ? '' : svgIcon('download'));
-    const nm = a.querySelector('.af-name');
-    nm.textContent = f.name;
-    a.querySelector('.af-size').textContent = fmtSize(f.size);
-    if (audio) {
-      const link = document.createElement('a');
-      link.className = 'af-name';
-      link.href = f.url;
-      link.download = f.name;
-      link.textContent = f.name;
-      nm.replaceWith(link);
-      const au = document.createElement('audio');
-      au.controls = true;
-      au.preload = 'none';
-      au.src = f.url;
-      a.appendChild(au);
-    }
-    return a;
-  }
-
-  function openLightbox(f) {
-    const lb = $('#lightbox');
-    $('#lb-img').src = f.url;
-    $('#lb-img').alt = f.name;
-    $('#lb-name').textContent = f.name + ' · ' + fmtSize(f.size);
-    $('#lb-open').href = f.url;
-    lb.hidden = false;
-  }
-  function closeLightbox() {
-    $('#lightbox').hidden = true;
-    $('#lb-img').removeAttribute('src');
-  }
-
-  // ---- emoji / tepki seçici
-  let emojiClose = null;
-  function openEmojiPop(anchor, list, onPick, reactMode, onClose) {
-    closeEmojiPop();
-    const pop = $('#emoji-pop');
-    pop.innerHTML = '';
-    pop.classList.toggle('react-mode', !!reactMode);
-    for (const e of list) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = e;
-      b.onclick = () => {
-        onPick(e);
-        if (reactMode) closeEmojiPop();
-      };
-      pop.appendChild(b);
-    }
-    pop.hidden = false;
-    const r = anchor.getBoundingClientRect();
-    const w = pop.offsetWidth;
-    const h = pop.offsetHeight;
-    let left = Math.min(r.right - w, window.innerWidth - w - 8);
-    left = Math.max(8, left);
-    let top = r.top - h - 8;
-    if (top < 8) top = Math.min(r.bottom + 8, window.innerHeight - h - 8);
-    pop.style.left = left + 'px';
-    pop.style.top = top + 'px';
-    emojiClose = onClose || null;
-  }
-  function closeEmojiPop() {
-    const pop = $('#emoji-pop');
-    if (pop.hidden) return;
-    pop.hidden = true;
-    if (emojiClose) emojiClose();
-    emojiClose = null;
-  }
-
-  // ---- mesaj kutusu
-  function autoGrow() {
-    const ta = $('#chat-input');
-    ta.style.height = 'auto';
-    ta.style.height = ta.scrollHeight + 'px';
-  }
-
-  function insertAtCaret(text) {
-    const ta = $('#chat-input');
-    const s = ta.selectionStart ?? ta.value.length;
-    const e = ta.selectionEnd ?? ta.value.length;
-    ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
-    ta.selectionStart = ta.selectionEnd = s + text.length;
-    ta.focus();
-    autoGrow();
-  }
-
-  function onComposerInput() {
-    autoGrow();
-    const ta = $('#chat-input');
-    const t = ta.value;
-    if (t.trim() && !t.startsWith('/') && Date.now() - chat.typingSentAt > 2500) {
-      chat.typingSentAt = Date.now();
-      wsSend({ t: 'typing' });
-    }
-    updateMention();
-  }
-
-  function updateMention() {
-    const ta = $('#chat-input');
-    const before = ta.value.slice(0, ta.selectionStart);
-    const mm = before.match(/(^|\s)@([^\s@]{0,24})$/);
-    if (!mm) return hideMention();
-    const q = lower(mm[2]);
-    const items = knownNames()
-      .filter((n) => n !== S.name)
-      .concat(['herkes'])
-      .filter((n) => lower(n).startsWith(q))
-      .slice(0, 8);
-    if (!items.length) return hideMention();
-    const prevSel = chat.mention ? chat.mention.sel : 0;
-    chat.mention = { start: before.length - mm[2].length - 1, items, sel: Math.min(prevSel, items.length - 1) };
-    renderMention();
-  }
-
-  function renderMention() {
-    const pop = $('#mention-pop');
-    const m = chat.mention;
-    pop.innerHTML = '<div class="mp-title">Kişiler</div>';
-    m.items.forEach((n, i) => {
-      const o = document.createElement('div');
-      o.className = 'mention-opt' + (i === m.sel ? ' sel' : '');
-      o.setAttribute('role', 'option');
-      const av = document.createElement('span');
-      av.className = 'avatar-sm';
-      av.style.cssText = 'display:grid;place-items:center;border-radius:50%;color:#fff;font-size:12px;font-weight:700;background:' + (n === 'herkes' ? 'var(--accent)' : 'hsl(' + avatarHue(n) + ' 55% 45%)');
-      av.textContent = n === 'herkes' ? '@' : n.charAt(0).toUpperCase();
-      const label = document.createElement('span');
-      label.textContent = n;
-      const small = document.createElement('small');
-      small.textContent = n === 'herkes' ? 'kanaldaki herkes' : '';
-      o.append(av, label, small);
-      o.onmousedown = (e) => {
-        e.preventDefault();
-        m.sel = i;
-        applyMention();
-      };
-      pop.appendChild(o);
-    });
-    pop.hidden = false;
-  }
-
-  function hideMention() {
-    chat.mention = null;
-    $('#mention-pop').hidden = true;
-  }
-
-  function applyMention() {
-    const m = chat.mention;
-    if (!m) return;
-    const ta = $('#chat-input');
-    const end = ta.selectionStart;
-    const ins = '@' + m.items[m.sel] + ' ';
-    ta.value = ta.value.slice(0, m.start) + ins + ta.value.slice(end);
-    ta.selectionStart = ta.selectionEnd = m.start + ins.length;
-    hideMention();
-    autoGrow();
-    ta.focus();
-  }
-
-  function onComposerKey(e) {
-    const m = chat.mention;
-    if (m) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        m.sel = (m.sel + (e.key === 'ArrowDown' ? 1 : -1) + m.items.length) % m.items.length;
-        return renderMention();
-      }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault();
-        return applyMention();
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        return hideMention();
-      }
-    }
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
-      e.preventDefault();
-      sendChat();
-    } else if (e.key === 'Escape' && chat.pending.length && !chat.sending) {
-      clearPending();
-    }
-  }
-
-  // ---- dosya ekleme / yükleme
-  function addFiles(list, pasted) {
-    if (!S.joined) return;
-    const max = (S.uploadMaxMB || 25) * 1048576;
-    let added = 0;
-    for (const f of list) {
-      if (chat.pending.length >= MAX_FILES) {
-        toast('Bir mesajda en fazla ' + MAX_FILES + ' dosya gönderebilirsin.');
-        break;
-      }
-      if (!f.size) continue;
-      if (f.size > max) {
-        toast(f.name + ' çok büyük (en fazla ' + S.uploadMaxMB + ' MB).', 4000);
-        continue;
-      }
-      let name = f.name || 'dosya';
-      if (pasted && /^image\.(png|jpe?g|gif|webp)$/i.test(name)) {
-        const d = new Date();
-        const p2 = (x) => String(x).padStart(2, '0');
-        name = 'ekran-goruntusu-' + p2(d.getHours()) + p2(d.getMinutes()) + p2(d.getSeconds()) + '.' + name.split('.').pop();
-      }
-      const p = { file: f, name, size: f.size, type: f.type || 'application/octet-stream', url: null, w: 0, h: 0, progress: 0, info: null, error: false };
-      if (/^image\//.test(f.type)) {
-        p.url = URL.createObjectURL(f);
-        const im = new Image();
-        im.onload = () => {
-          p.w = im.naturalWidth;
-          p.h = im.naturalHeight;
-        };
-        im.src = p.url;
-      }
-      chat.pending.push(p);
-      added++;
-    }
-    if (added) {
-      if (chat.hidden) setChatHidden(false);
-      renderTray();
-      $('#chat-input').focus();
-    }
-  }
-
-  function renderTray() {
-    const tray = $('#attach-tray');
-    tray.innerHTML = '';
-    tray.hidden = chat.pending.length === 0;
-    for (const p of chat.pending) {
-      const it = document.createElement('div');
-      it.className = 'tray-item' + (p.error ? ' error' : '');
-      const th = document.createElement('div');
-      th.className = 'tray-thumb';
-      if (p.url) {
-        const img = document.createElement('img');
-        img.src = p.url;
-        img.alt = '';
-        th.appendChild(img);
-      } else th.innerHTML = svgIcon('file');
-      const nm = document.createElement('div');
-      nm.className = 'tray-name';
-      nm.textContent = p.name;
-      nm.title = p.name;
-      const sz = document.createElement('div');
-      sz.className = 'tray-size';
-      sz.textContent = p.error ? 'Yüklenemedi' : fmtSize(p.size);
-      const rm = document.createElement('button');
-      rm.type = 'button';
-      rm.className = 'tray-rm';
-      rm.title = 'Kaldır';
-      rm.innerHTML = svgIcon('trash');
-      rm.disabled = chat.sending;
-      rm.onclick = () => {
-        if (p.url) URL.revokeObjectURL(p.url);
-        chat.pending.splice(chat.pending.indexOf(p), 1);
-        renderTray();
-      };
-      it.append(th, nm, sz, rm);
-      if (chat.sending && !p.info) {
-        const bar = document.createElement('div');
-        bar.className = 'tray-bar';
-        bar.innerHTML = '<i></i>';
-        bar.firstChild.style.width = Math.round(p.progress * 100) + '%';
-        p.bar = bar.firstChild;
-        it.appendChild(bar);
-      }
-      tray.appendChild(it);
-    }
-  }
-
-  function clearPending() {
-    for (const p of chat.pending) if (p.url) URL.revokeObjectURL(p.url);
-    chat.pending = [];
-    renderTray();
-  }
-
-  function uploadFile(p) {
-    return new Promise((resolve, reject) => {
-      const q = new URLSearchParams({ k: S.streamToken || '', name: p.name });
-      if (p.w && p.h) {
-        q.set('w', p.w);
-        q.set('h', p.h);
-      }
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/upload?' + q);
-      xhr.setRequestHeader('Content-Type', p.type);
-      xhr.upload.onprogress = (e) => {
-        if (!e.lengthComputable) return;
-        p.progress = e.loaded / e.total;
-        if (p.bar) p.bar.style.width = Math.round(p.progress * 100) + '%';
-      };
-      xhr.onload = () => {
-        let body = null;
-        try {
-          body = JSON.parse(xhr.responseText);
-        } catch {}
-        if (xhr.status === 200 && body && body.id) return resolve(body);
-        const msg = (body && body.error) || (xhr.status === 413 ? 'Dosya çok büyük.' : 'Yükleme başarısız (' + xhr.status + ').');
-        reject(new Error(p.name + ': ' + msg));
-      };
-      xhr.onerror = () => reject(new Error(p.name + ': bağlantı hatası, yüklenemedi.'));
-      xhr.send(p.file);
-    });
-  }
-
-  async function sendChat() {
-    if (chat.sending) return;
-    const ta = $('#chat-input');
-    const text = ta.value.trim();
-    if (text.startsWith('/') && !chat.pending.length) {
-      chatCommand(text);
-      ta.value = '';
-      autoGrow();
-      return;
-    }
-    if (!text && !chat.pending.length) return;
-    if (!S.ws || S.ws.readyState !== 1) return toast('Sunucuya bağlı değil, mesaj gönderilemedi.');
-    hideMention();
-    if (chat.pending.length) {
-      chat.sending = true;
-      ta.readOnly = true;
-      $('#chat-form').classList.add('busy');
-      renderTray();
-      try {
-        for (const p of chat.pending) {
-          if (p.info) continue;
-          p.error = false;
-          try {
-            p.info = await uploadFile(p);
-          } catch (err) {
-            p.error = true;
-            throw err;
-          }
-        }
-      } catch (err) {
-        toast(err.message, 5000);
-        return;
-      } finally {
-        chat.sending = false;
-        ta.readOnly = false;
-        $('#chat-form').classList.remove('busy');
-        renderTray();
-      }
-    }
-    if (!wsSend({ t: 'chat', text, files: chat.pending.map((p) => p.info.id) })) return toast('Sunucuya bağlı değil, mesaj gönderilemedi.');
-    ta.value = '';
-    autoGrow();
-    clearPending();
-    chat.typingSentAt = 0;
-    ta.focus();
-  }
-
-  // ---- yazıyor…
-  function onTyping(m) {
-    chat.typers.set(m.from, { name: m.name, until: Date.now() + 4500 });
-    renderTyping();
-  }
-  function renderTyping() {
-    const t = Date.now();
-    for (const [id, v] of chat.typers) if (v.until < t || !S.peers.has(id)) chat.typers.delete(id);
-    const names = [...chat.typers.values()].map((v) => v.name);
-    const box = $('#typing');
-    box.classList.toggle('on', names.length > 0);
-    const out = box.querySelector('.typing-text');
-    out.innerHTML = '';
-    if (!names.length) return;
-    if (names.length > 3) return (out.textContent = 'Birkaç kişi yazıyor…');
-    names.forEach((n, i) => {
-      if (i) out.append(i === names.length - 1 ? ' ve ' : ', ');
-      const b = document.createElement('b');
-      b.textContent = n;
-      out.appendChild(b);
-    });
-    out.append(' yazıyor…');
-  }
-
-  // ---- görünüm
-  function setChatHidden(hidden) {
-    chat.hidden = hidden;
-    store.set('chatHidden', hidden);
-    $('.stage').classList.toggle('chat-hidden', hidden);
-    $('#chat-toggle').classList.toggle('active', !hidden);
-    if (!hidden) {
-      chat.unread = 0;
-      $('#chat-badge').hidden = true;
-      requestAnimationFrame(scrollChatBottom);
-    }
-  }
-
-  function resetChat() {
-    $('#chat-log').innerHTML = chat.welcomeHtml;
-    chat.msgs.clear();
-    chat.last = null;
-    chat.unread = 0;
-    chat.typers.clear();
-    renderTyping();
-    $('#chat-badge').hidden = true;
-    $('#jump-new').hidden = true;
-    hideMention();
-    closeEmojiPop();
-    closeLightbox();
-  }
-
-  function initChat() {
-    chat.welcomeHtml = $('#chat-log').innerHTML;
-    const ta = $('#chat-input');
-    ta.addEventListener('input', onComposerInput);
-    ta.addEventListener('keydown', onComposerKey);
-    ta.addEventListener('click', updateMention);
-    ta.addEventListener('blur', () => setTimeout(hideMention, 120));
-    $('#chat-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      sendChat();
-    });
-    $('#attach-btn').onclick = () => $('#file-input').click();
-    $('#file-input').onchange = (e) => {
-      addFiles([...e.target.files]);
-      e.target.value = '';
-    };
-    $('#emoji-btn').onclick = (e) => {
-      e.stopPropagation();
-      if (!$('#emoji-pop').hidden) return closeEmojiPop();
-      openEmojiPop($('#emoji-btn'), EMOJIS, (em) => insertAtCaret(em), false);
-    };
-    $('#chat-log').addEventListener('scroll', () => {
-      chat.stuck = atBottom();
-      if (chat.stuck) $('#jump-new').hidden = true;
-    });
-    $('#chat-log').addEventListener('click', (e) => {
-      const sp = e.target.closest('.spoiler');
-      if (sp) sp.classList.add('shown');
-    });
-    $('#jump-new').onclick = scrollChatBottom;
-    // Mesaj kutusu büyüyünce / ek eklenince / ayırıcı sürüklenince en altta kal
-    if (window.ResizeObserver) new ResizeObserver(() => chat.stuck && scrollChatBottom()).observe($('#chat-log'));
-    $('#chat-toggle').onclick = () => setChatHidden(!chat.hidden);
-    setChatHidden(chat.hidden);
-
-    // Yapıştırma (ekran görüntüsü), sürükle-bırak
-    window.addEventListener('paste', (e) => {
-      if (!S.joined || !e.clipboardData) return;
-      const t = e.target;
-      const elsewhere = t && t !== ta && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
-      const files = [...e.clipboardData.files];
-      if (!files.length || elsewhere) return;
-      e.preventDefault();
-      addFiles(files, true);
-    });
-    let dragDepth = 0;
-    const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes('Files');
-    window.addEventListener('dragenter', (e) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth++;
-      if (S.joined) {
-        if (chat.hidden) setChatHidden(false);
-        $('#drop-max').textContent = S.uploadMaxMB;
-        $('#drop-zone').hidden = false;
-      }
-    });
-    window.addEventListener('dragover', (e) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = S.joined ? 'copy' : 'none';
-    });
-    window.addEventListener('dragleave', (e) => {
-      if (!hasFiles(e)) return;
-      if (--dragDepth <= 0) {
-        dragDepth = 0;
-        $('#drop-zone').hidden = true;
-      }
-    });
-    window.addEventListener('drop', (e) => {
-      if (!hasFiles(e)) return;
-      e.preventDefault();
-      dragDepth = 0;
-      $('#drop-zone').hidden = true;
-      addFiles([...e.dataTransfer.files]);
-    });
-
-    // Görüşme / sohbet ayırıcısı
-    const body = $('.stage-body');
-    const sp = $('#splitter');
-    const ratio = store.get('callRatio', 0.44);
-    body.style.setProperty('--call-ratio', ratio);
-    sp.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      sp.setPointerCapture(e.pointerId);
-      sp.classList.add('dragging');
-      const move = (ev) => {
-        const r = body.getBoundingClientRect();
-        const v = Math.max(0.15, Math.min(0.85, (ev.clientY - r.top) / r.height));
-        body.style.setProperty('--call-ratio', v.toFixed(3));
-      };
-      const up = () => {
-        sp.classList.remove('dragging');
-        sp.removeEventListener('pointermove', move);
-        sp.removeEventListener('pointerup', up);
-        sp.removeEventListener('pointercancel', up);
-        store.set('callRatio', Number(body.style.getPropertyValue('--call-ratio')) || 0.44);
-        if (chat.stuck) scrollChatBottom();
-      };
-      sp.addEventListener('pointermove', move);
-      sp.addEventListener('pointerup', up);
-      sp.addEventListener('pointercancel', up);
-    });
-    sp.addEventListener('dblclick', () => setChatHidden(true));
-
-    // Görsel büyütme ve açılır menüleri kapatma
-    $('#lightbox').addEventListener('click', (e) => {
-      if (e.target.id !== 'lb-img' && e.target.id !== 'lb-open') closeLightbox();
-    });
-    document.addEventListener('mousedown', (e) => {
-      if (!e.target.closest('#emoji-pop')) closeEmojiPop();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.key !== 'Escape') return;
-      if (!$('#lightbox').hidden) closeLightbox();
-      closeEmojiPop();
-    });
-    setInterval(renderTyping, 1000);
   }
 
   const svgIcon = (id) => `<svg class="ic"><use href="#i-${id}"/></svg>`;
@@ -1733,31 +878,10 @@
         onSignal(m.from, m.data);
         break;
       case 'chat':
-        if (m.admin) toast('📢 ' + m.text, 5000);
-        chat.typers.delete(m.from);
-        renderTyping();
-        renderMessage(m, false);
-        break;
-      case 'chat-delete':
-        removeMessage(m.id);
-        break;
-      case 'chat-react': {
-        const it = chat.msgs.get(m.id);
-        if (it) {
-          it.m.reactions = m.reactions || {};
-          renderReactions(m.id);
-        }
-        break;
-      }
-      case 'chat-clear':
-        resetChat();
-        sysLine('Sohbet yönetici tarafından temizlendi', 'admin');
-        break;
-      case 'typing':
-        onTyping(m);
-        break;
-      case 'music-results':
-        onMusicResults(m);
+        if (m.admin) {
+          chatAppend('', '📢 Yönetici: ' + m.text, 0, true);
+          toast('📢 ' + m.text, 5000);
+        } else chatAppend(m.name, m.text, m.ts, false);
         break;
       case 'kicked':
         onKicked(m.message);
@@ -1833,13 +957,6 @@
         if (!p.absentSince) p.absentSince = now();
         renderPeer(p);
       }
-    }
-    if (m.uploadMaxMB) S.uploadMaxMB = m.uploadMaxMB;
-    if (Array.isArray(m.chat)) {
-      // İlk girişte geçmişi baştan çiz; yeniden bağlanınca sadece kaçırılanları ekle
-      if (first) resetChat();
-      for (const msg of m.chat) renderMessage(msg, true);
-      if (first) requestAnimationFrame(scrollChatBottom);
     }
     if (first && S.peers.size === 0) chatAppend('', 'Odada şu an kimse yok. Linki arkadaşlarına gönder!', 0, true);
     if (m.streamToken) S.streamToken = m.streamToken;
@@ -2750,7 +1867,7 @@
       search: !!m.search,
       stream: !!m.stream,
     };
-    if (m.event) sysLine(m.event, 'music');
+    if (m.event) chatAppend('', m.event, 0, true);
     renderMusic();
     syncPlayer();
   }
@@ -2777,53 +1894,21 @@
     one: { icon: 'repeat-one', title: 'Tekrar: tek şarkı (tıkla: kapalı)', next: 'off' },
   };
 
-  const ytThumb = (id) => 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/mqdefault.jpg';
-  const thumbOf = (item) => (item ? item.thumb || (sourceOf(item) === 'yt' && item.id ? ytThumb(item.id) : null) : null);
-
-  /** Sıra/geçmiş satırı: küçük kapak, ad, süre, üzerine gelince işlemler */
-  function mpItem(item, actions) {
+  /** Sıra/geçmiş satırı */
+  function songRow(item, buttonText, buttonTitle, onClick) {
     const li = document.createElement('li');
-    li.className = 'mp-item';
-    const th = document.createElement('div');
-    th.className = 'mp-thumb';
-    const src = thumbOf(item);
-    if (src) {
-      const img = document.createElement('img');
-      img.src = src;
-      img.alt = '';
-      img.loading = 'lazy';
-      img.onerror = () => (th.innerHTML = svgIcon('music'));
-      th.appendChild(img);
-    } else th.innerHTML = svgIcon('music');
-    const info = document.createElement('div');
-    info.className = 'mp-info';
-    info.style.minWidth = '0';
-    const t = document.createElement('div');
-    t.className = 'mp-title';
+    const t = document.createElement('span');
+    t.className = 'q-title';
     t.textContent = item.title;
-    t.title = item.title;
-    const meta = document.createElement('div');
-    meta.className = 'mp-meta';
-    meta.textContent = [sourceLabel(item, true), item.author, item.by].filter(Boolean).join(' · ');
-    info.append(t, meta);
-    const side = document.createElement('div');
-    side.className = 'mp-side';
-    const dur = document.createElement('span');
-    dur.className = 'mp-dur';
-    dur.textContent = fmtDur(item.duration);
-    const acts = document.createElement('div');
-    acts.className = 'mp-acts';
-    for (const [icon, title, fn, cls] of actions) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'icon-btn' + (cls ? ' ' + cls : '');
-      b.title = title;
-      b.innerHTML = svgIcon(icon);
-      b.onclick = fn;
-      acts.appendChild(b);
-    }
-    side.append(dur, acts);
-    li.append(th, info, side);
+    const meta = document.createElement('span');
+    meta.className = 'q-by';
+    meta.textContent = [sourceLabel(item, true), fmtDur(item.duration), item.by].filter(Boolean).join(' · ');
+    const btn = document.createElement('button');
+    btn.className = 'btn tiny ghost';
+    btn.textContent = buttonText;
+    btn.title = buttonTitle;
+    btn.onclick = onClick;
+    li.append(t, meta, btn);
     return li;
   }
 
@@ -2835,29 +1920,18 @@
     lb.dataset.mode = S.music.loop;
     lb.title = loop.title;
     lb.classList.toggle('on', S.music.loop !== 'off');
-    $('#music-input').placeholder = S.music.search ? 'Şarkı ara ya da link yapıştır' : 'YouTube / SoundCloud linki yapıştır';
+    $('#music-input').placeholder = S.music.search ? 'YouTube / SoundCloud linki ya da şarkı adı' : 'YouTube / SoundCloud linki';
     $('#now-playing').hidden = !cur;
     $('#music-empty').hidden = !!cur;
     if (cur) {
       $('#np-title').textContent = cur.title;
-      $('#np-title').title = cur.title;
-      $('#np-sub').textContent = [sourceLabel(cur), cur.author, 'ekleyen: ' + cur.by].filter(Boolean).join(' · ');
+      $('#np-sub').textContent = [sourceLabel(cur), cur.author, fmtDur(cur.duration), 'ekleyen: ' + cur.by].filter(Boolean).join(' · ');
       $('#np-sub').title =
         sourceOf(cur) === 'sc'
           ? 'SoundCloud: sadece ses (saatte ~70 MB)'
           : S.music.stream
             ? 'YouTube, sunucudan sadece ses olarak (saatte ~60 MB)'
             : 'YouTube: video + ses (saatte ~350 MB)';
-      const src = thumbOf(cur);
-      const art = $('#np-art');
-      if (src) {
-        if (art.getAttribute('src') !== src) art.src = src;
-        art.hidden = false;
-      } else {
-        art.removeAttribute('src');
-        art.hidden = true;
-      }
-      $('#np-art-wrap').classList.toggle('has-img', !!src);
       $('#m-pause').innerHTML = svgIcon(cur.pausedAt != null ? 'play' : 'pause');
       $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
     }
@@ -2866,177 +1940,20 @@
     if (cur) pill.querySelector('span').textContent = cur.title;
     $('#music-dot').hidden = !cur;
 
-    const q = S.music.queue;
     const list = $('#music-queue');
     list.innerHTML = '';
-    q.forEach((item, i) => {
-      const acts = [];
-      if (i > 0) acts.push(['arrow-up', 'Sıradaki yap', () => wsSend({ t: 'music-move', key: item.key })]);
-      acts.push(['x', 'Sıradan çıkar', () => wsSend({ t: 'music-remove', key: item.key }), 'rm']);
-      list.appendChild(mpItem(item, acts));
-    });
-    const total = q.reduce((a, it) => a + (it.duration || 0), 0);
-    $('#queue-count').textContent = q.length ? q.length + ' şarkı' + (total ? ' · ' + fmtDur(total) : '') : '';
-    $('#queue-empty').hidden = q.length > 0;
+    for (const item of S.music.queue) {
+      list.appendChild(songRow(item, '✕', 'Sıradan çıkar', () => wsSend({ t: 'music-remove', key: item.key })));
+    }
+    $('#queue-head').hidden = S.music.queue.length === 0;
 
     const hist = $('#music-history');
     hist.innerHTML = '';
     for (const item of S.music.history.slice(0, 10)) {
-      hist.appendChild(mpItem(item, [['repeat', 'Tekrar sıraya ekle', () => wsSend({ t: 'music-requeue', key: item.key })]]));
+      hist.appendChild(songRow(item, '↺', 'Tekrar sıraya ekle', () => wsSend({ t: 'music-requeue', key: item.key })));
     }
     $('#history-wrap').hidden = S.music.history.length === 0;
     $('#m-prev').disabled = !cur && S.music.history.length === 0;
-    $('#m-shuffle').disabled = q.length < 2;
-    renderArtVisibility();
-    updateProgress();
-  }
-
-  /** YouTube videosu oynatıcıda görünür; sadece ses çalarken (akış) kapak gösterilir */
-  function renderArtVisibility() {
-    const cur = S.music.current;
-    const kind = cur ? playerKindFor(cur) : null;
-    const showPlayer = !!cur && !S.musicOff && kind !== 'stream';
-    $('#player-box').hidden = !showPlayer;
-    $('#np-art-wrap').hidden = showPlayer;
-  }
-
-  function musicDuration(cur) {
-    if (cur.duration) return cur.duration;
-    const d = S.player && S.playKey === cur.key ? S.player.duration() : 0;
-    return d > 0 ? d : 0;
-  }
-
-  function updateProgress() {
-    const cur = S.music.current;
-    if (!cur) return;
-    const dur = musicDuration(cur);
-    let pos = Math.max(0, musicPos(cur));
-    if (dur) pos = Math.min(pos, dur);
-    $('#np-cur').textContent = fmtDur(pos) || '0:00';
-    $('#np-dur').textContent = dur ? fmtDur(dur) : '—';
-    $('#np-fill').style.width = dur ? (pos / dur) * 100 + '%' : '0';
-    $('#np-bar').classList.toggle('no-dur', !dur);
-  }
-
-  // ---- arama: sonuç listesinden seçilir
-  const msearch = { q: '', items: null, error: null, timer: null };
-  const isMusicLink = (v) => /^(https?:\/\/|www\.)|youtu\.?be\/|soundcloud\.com\//i.test(v);
-
-  function startMusicSearch(q) {
-    clearTimeout(msearch.timer);
-    Object.assign(msearch, { q, items: null, error: null });
-    if (!wsSend({ t: 'music-search', q })) {
-      msearch.error = 'Sunucuya bağlı değil.';
-    } else {
-      msearch.timer = setTimeout(() => {
-        if (msearch.q === q && !msearch.items && !msearch.error) {
-          msearch.error = 'Arama zaman aşımına uğradı, tekrar dene.';
-          renderMusicResults();
-        }
-      }, 25000);
-    }
-    renderMusicResults();
-  }
-
-  function onMusicResults(m) {
-    if (m.q !== msearch.q) return;
-    clearTimeout(msearch.timer);
-    msearch.items = Array.isArray(m.items) ? m.items : [];
-    msearch.error = m.error || null;
-    renderMusicResults();
-  }
-
-  function hideMusicResults() {
-    clearTimeout(msearch.timer);
-    Object.assign(msearch, { q: '', items: null, error: null });
-    $('#music-results').hidden = true;
-    $('#music-results').innerHTML = '';
-  }
-
-  function renderMusicResults() {
-    const box = $('#music-results');
-    box.innerHTML = '';
-    box.hidden = false;
-    const head = document.createElement('div');
-    head.className = 'mpr-head';
-    const ht = document.createElement('span');
-    ht.innerHTML = '<b></b> için sonuçlar';
-    ht.firstChild.textContent = '“' + msearch.q + '”';
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'icon-btn';
-    close.title = 'Kapat';
-    close.style.cssText = 'width:24px;height:24px';
-    close.innerHTML = svgIcon('x');
-    close.onclick = hideMusicResults;
-    head.append(ht, close);
-    box.appendChild(head);
-    if (msearch.error) {
-      const p = document.createElement('div');
-      p.className = 'mpr-msg error';
-      p.textContent = msearch.error;
-      return box.appendChild(p);
-    }
-    if (!msearch.items) {
-      for (let i = 0; i < 3; i++) {
-        const sk = document.createElement('div');
-        sk.className = 'mp-result';
-        sk.innerHTML = '<span class="sk"></span><span><div class="sk-line" style="width:90%"></div><div class="sk-line" style="width:50%"></div></span>';
-        box.appendChild(sk);
-      }
-      return;
-    }
-    if (!msearch.items.length) {
-      const p = document.createElement('div');
-      p.className = 'mpr-msg';
-      p.textContent = 'Sonuç bulunamadı. Başka bir şey dene ya da link yapıştır.';
-      return box.appendChild(p);
-    }
-    for (const it of msearch.items) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'mp-result';
-      b.title = 'Sıraya ekle: ' + it.title;
-      const img = document.createElement('img');
-      img.alt = '';
-      img.src = it.thumb || ytThumb(it.id);
-      const info = document.createElement('span');
-      info.style.minWidth = '0';
-      const t = document.createElement('span');
-      t.className = 'mpr-title';
-      t.textContent = it.title;
-      const meta = document.createElement('span');
-      meta.className = 'mpr-meta';
-      meta.textContent = [it.author, fmtDur(it.duration)].filter(Boolean).join(' · ');
-      info.append(t, meta);
-      b.append(img, info);
-      b.onclick = () => pickMusicResult(it);
-      box.appendChild(b);
-    }
-  }
-
-  function pickMusicResult(it) {
-    if (addMusic('https://www.youtube.com/watch?v=' + it.id, true)) {
-      toast('Sıraya eklendi: ' + it.title);
-      $('#music-input').value = '';
-      hideMusicResults();
-    }
-  }
-
-  function submitMusic() {
-    const input = $('#music-input');
-    const v = input.value.trim();
-    if (!v) return;
-    if (isMusicLink(v) || !S.music.search) {
-      if (addMusic(v)) {
-        input.value = '';
-        hideMusicResults();
-      }
-      return;
-    }
-    // Aynı arama zaten listelendiyse Enter ilk sonucu ekler
-    if (msearch.q === v && msearch.items && msearch.items.length) return pickMusicResult(msearch.items[0]);
-    startMusicSearch(v);
   }
 
   // ---------------------------------------------------------------------
@@ -3058,8 +1975,11 @@
     const el = document.createElement('audio');
     el.preload = 'auto';
     if (S.outId && el.setSinkId) el.setSinkId(S.outId).catch(() => {});
+    const ui = document.createElement('div');
+    ui.className = 'stream-ui';
+    ui.innerHTML = '<div class="stream-bar"><div class="stream-fill"></div></div><div class="stream-times"><span class="st-now">0:00</span><span class="st-mode">sadece ses</span><span class="st-dur"></span></div>';
     const box = $('#player-box');
-    box.replaceChildren(el);
+    box.replaceChildren(el, ui);
     box.classList.remove('sc');
     box.classList.add('stream');
     let state = 'unstarted';
@@ -3083,6 +2003,13 @@
       if (el.getAttribute('src')) ev.onError('stream-error');
     });
     el.addEventListener('loadedmetadata', () => ev.onDuration && ev.onDuration());
+    const fmt = (x) => (x > 0 ? fmtDur(x) : '0:00');
+    const tick = setInterval(() => {
+      const d = isFinite(el.duration) && el.duration > 0 ? el.duration : (S.music.current && S.music.current.duration) || 0;
+      ui.querySelector('.stream-fill').style.width = d ? Math.min(100, (el.currentTime / d) * 100) + '%' : '0';
+      ui.querySelector('.st-now').textContent = fmt(el.currentTime);
+      ui.querySelector('.st-dur').textContent = d ? fmtDur(d) : '';
+    }, 500);
     const load = (c, p, pl) => {
       id = c.id;
       state = pl ? 'buffering' : 'cued';
@@ -3119,11 +2046,13 @@
       muted: () => el.muted,
       setSink: (sink) => el.setSinkId && el.setSinkId(sink || '').catch(() => {}),
       destroy: () => {
+        clearInterval(tick);
         el.pause();
         el.removeAttribute('src');
         el.load(); // indirmeyi gerçekten durdur
         box.classList.remove('stream');
         el.remove();
+        ui.remove();
       },
     };
   }
@@ -3519,22 +2448,32 @@
     const b = $('#m-off');
     if (!b) return;
     b.classList.toggle('on', S.musicOff);
-    b.setAttribute('aria-checked', String(S.musicOff));
     b.textContent = S.musicOff ? 'Müzik sende kapalı' : 'Bende kapat';
     b.title = S.musicOff
       ? 'Müzik sadece sende kapalı; diğerlerinde çalıyor. Tıklayınca kaldığı yerden açılır.'
       : 'Müziği sadece kendinde kapat: hiç internet harcamaz, diğerlerinde çalmaya devam eder.';
-    renderArtVisibility();
+    $('#player-box').hidden = S.musicOff;
   }
 
-  function addMusic(url, quiet) {
+  function setSideTab(name) {
+    for (const b of document.querySelectorAll('.side-tab')) b.classList.toggle('active', b.dataset.tab === name);
+    // Müzik sekmesi gizlenirken display:none yerine ekran dışına alınır ki oynatıcı çalmaya devam etsin.
+    $('#tab-chat').classList.toggle('tab-off', name !== 'chat');
+    $('#tab-music').classList.toggle('tab-off', name !== 'music');
+    if (name === 'chat') {
+      S.unread = 0;
+      $('#chat-badge').hidden = true;
+    }
+  }
+
+  function addMusic(url) {
     url = (url || '').trim();
     if (!url) return false;
     if (!wsSend({ t: 'music-add', url })) {
       toast('Sunucuya bağlı değil.');
       return false;
     }
-    if (!quiet && S.music.search && !isMusicLink(url) && !/^[A-Za-z0-9_-]{11}$/.test(url)) toast('🔎 Aranıyor: ' + url, 2500);
+    if (S.music.search && !/youtu.?be|^[A-Za-z0-9_-]{11}$/i.test(url)) toast('🔎 Aranıyor: ' + url, 2500);
     return true;
   }
 
@@ -3802,10 +2741,7 @@
     $('#screens').innerHTML = '';
     $('.stage').classList.remove('has-screens', 'focus');
     $('.user-panel').classList.remove('speaking');
-    resetChat();
-    clearPending();
-    hideMusicResults();
-    $('#music-panel').classList.remove('open');
+    $('#chat-log').innerHTML = '';
     banner(null);
     $('#room-view').hidden = true;
     $('#join-view').hidden = false;
@@ -3903,38 +2839,39 @@
     };
     $('#share-btn').hidden = !canShare;
     $('#stage-invite').onclick = () => $('#copy-link').click();
-    initChat();
+    $('#chat-btn').onclick = () => {
+      const panel = $('#chat-panel');
+      panel.classList.toggle('open');
+      if (panel.classList.contains('open') && !$('#tab-chat').classList.contains('tab-off')) {
+        S.unread = 0;
+        $('#chat-badge').hidden = true;
+        $('#chat-input').focus();
+      }
+    };
+    $('#chat-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = $('#chat-input');
+      const text = input.value.trim();
+      if (!text) return;
+      if (text.startsWith('/')) {
+        chatCommand(text);
+        input.value = '';
+        return;
+      }
+      if (!wsSend({ t: 'chat', text })) return toast('Sunucuya bağlı değil, mesaj gönderilemedi.');
+      input.value = '';
+    });
 
-    // Müzik paneli
-    $('#music-btn').onclick = () => $('#music-panel').classList.toggle('open');
-    $('#music-close').onclick = () => $('#music-panel').classList.remove('open');
-    $('#np-pill').onclick = () => $('#music-panel').classList.add('open');
+    // Yan panel sekmeleri + müzik
+    for (const b of document.querySelectorAll('.side-tab')) b.onclick = () => setSideTab(b.dataset.tab);
+    $('#np-pill').onclick = () => {
+      setSideTab('music');
+      $('#chat-panel').classList.add('open');
+    };
     $('#music-form').addEventListener('submit', (e) => {
       e.preventDefault();
-      submitMusic();
+      if (addMusic($('#music-input').value)) $('#music-input').value = '';
     });
-    $('#music-input').addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') hideMusicResults();
-    });
-    $('#music-input').addEventListener('input', (e) => {
-      if (!e.target.value.trim()) hideMusicResults();
-    });
-    $('#np-bar').onclick = (e) => {
-      const cur = S.music.current;
-      const dur = cur && musicDuration(cur);
-      if (!dur) return;
-      const r = e.currentTarget.getBoundingClientRect();
-      wsSend({ t: 'music-seek', pos: Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur });
-    };
-    $('#np-bar').onmousemove = (e) => {
-      const cur = S.music.current;
-      const dur = cur && musicDuration(cur);
-      if (!dur) return;
-      const r = e.currentTarget.getBoundingClientRect();
-      e.currentTarget.title = 'Herkes için ' + (fmtDur(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * dur) || '0:00') + ' konumuna sar';
-    };
-    $('#m-shuffle').onclick = () => wsSend({ t: 'music-shuffle' });
-    setInterval(() => S.joined && updateProgress(), 500);
     $('#m-pause').onclick = () => {
       const cur = S.music.current;
       if (cur) wsSend({ t: cur.pausedAt != null ? 'music-resume' : 'music-pause' });

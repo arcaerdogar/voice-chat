@@ -18,13 +18,8 @@ services:
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       # YouTube sunucuyu bot sanarsa: tarayıcıdan alınan çerezleri data/youtube-cookies.txt olarak koyun
       - YTDLP_COOKIES=/data/youtube-cookies.txt
-      # Sohbette dosya paylaşımı: dosya başına sınır (MB), toplam disk sınırı (MB), saklama süresi (saat)
-      - UPLOAD_MAX_MB=${UPLOAD_MAX_MB:-25}
-      - UPLOAD_MAX_TOTAL_MB=${UPLOAD_MAX_TOTAL_MB:-2048}
-      - UPLOAD_TTL_HOURS=${UPLOAD_TTL_HOURS:-24}
     volumes:
       - ./data:/data:ro
-      - uploads:/uploads
     # Sadece sunucunun içinden erişilir; dışarıya nginx açar.
     ports:
       - "127.0.0.1:4010:3000"
@@ -42,6 +37,3 @@ services:
       - -c
       - /etc/coturn/turnserver.conf
       - --static-auth-secret=${TURN_SECRET:?.env dosyasinda TURN_SECRET ayarlanmali}
-
-volumes:
-  uploads:

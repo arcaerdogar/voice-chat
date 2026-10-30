@@ -38,21 +38,6 @@
     <symbol id="i-video" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="2"/><path d="M15.5 10.5l6-3.5v10l-6-3.5z"/></symbol>
     <symbol id="i-video-off" viewBox="0 0 24 24"><path d="M15.5 13.5V8a2 2 0 0 0-2-2H9M5 6a2 2 0 0 0-2.5 2v8a2 2 0 0 0 2 2h9a2 2 0 0 0 1.6-.8M15.5 10.5l6-3.5v10l-3-1.75"/><path d="M3 3l18 18"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.8" fill="currentColor" stroke="none"/></symbol>
-    <symbol id="i-plus-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="currentColor" stroke="none"/><path d="M12 7.5v9M7.5 12h9" stroke="#383a40" stroke-width="2.4"/></symbol>
-    <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M8 14.5a5 5 0 0 0 8 0"/><circle cx="9" cy="9.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="9.5" r="1.2" fill="currentColor" stroke="none"/></symbol>
-    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
-    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/></symbol>
-    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
-    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
-    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
-    <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
-    <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
-    <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
-    <symbol id="i-megaphone" viewBox="0 0 24 24"><path d="M3 10v4a1 1 0 0 0 1 1h3l7 4V5L7 9H4a1 1 0 0 0-1 1z"/><path d="M18 8.5a5 5 0 0 1 0 7"/></symbol>
-    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v6M12 7.5v.5"/></symbol>
-    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></symbol>
-    <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2.5-6.5z" fill="currentColor"/></symbol>
-    <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/></symbol>
     <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
   </svg>
 
@@ -137,113 +122,63 @@
         <span class="muted head-desc">Ses doğrudan kişiler arasında akar</span>
         <span class="spacer"></span>
         <button id="stage-invite" class="icon-btn mobile-only" title="Davet linkini kopyala"><svg class="ic"><use href="#i-link"/></svg></button>
-        <button id="chat-toggle" class="icon-btn" title="Sohbeti gizle / göster"><svg class="ic"><use href="#i-chat"/></svg><span id="chat-badge" class="badge" hidden></span></button>
-        <button id="music-btn" class="icon-btn mobile-only" title="Müzik"><svg class="ic"><use href="#i-music"/></svg></button>
+        <button id="chat-btn" class="icon-btn chat-toggle" title="Sohbet ve müzik">
+          <svg class="ic"><use href="#i-chat"/></svg><span id="chat-badge" class="badge" hidden></span>
+        </button>
       </header>
       <div id="banner" class="banner" hidden></div>
-
-      <div class="stage-body">
-        <!-- Görüşme: kişi kutuları, kameralar, ekran paylaşımı -->
-        <section id="call" class="call">
-          <div id="screens" class="screens"></div>
-          <div id="participants" class="participants" aria-live="polite"></div>
-        </section>
-
-        <div id="splitter" class="splitter" role="separator" aria-orientation="horizontal" title="Sürükle: boyutlandır · Çift tık: sohbeti gizle/göster"><span></span></div>
-
-        <!-- Sohbet -->
-        <section id="chat-pane" class="chat-pane" aria-label="Sohbet">
-          <div id="chat-log" class="chat-log" role="log" aria-live="polite">
-            <div class="chat-welcome">
-              <div class="cw-ic"><svg class="ic"><use href="#i-chat"/></svg></div>
-              <h3>Kanala hoş geldin!</h3>
-              <p class="muted">Mesajlar, görseller ve dosyalar burada. Dosya göndermek için <b>+</b>'ya bas, sürükle-bırak yap ya da <b>Ctrl+V</b> ile yapıştır.</p>
-            </div>
-          </div>
-          <button id="jump-new" class="jump-new" type="button" hidden>Yeni mesajlar <svg class="ic"><use href="#i-arrow-up"/></svg></button>
-          <div id="typing" class="typing" aria-live="polite"><span class="dots"><i></i><i></i><i></i></span><span class="typing-text"></span></div>
-          <form id="chat-form" class="composer" autocomplete="off">
-            <div id="mention-pop" class="mention-pop" role="listbox" hidden></div>
-            <div class="composer-box">
-              <div id="attach-tray" class="attach-tray" hidden></div>
-              <div class="composer-row">
-                <button type="button" id="attach-btn" class="icon-btn attach-btn" title="Dosya ya da görsel ekle"><svg class="ic"><use href="#i-plus-circle"/></svg></button>
-                <input type="file" id="file-input" multiple hidden>
-                <textarea id="chat-input" rows="1" maxlength="2000" placeholder="Mesaj gönder" aria-label="Mesaj"></textarea>
-                <button type="button" id="emoji-btn" class="icon-btn" title="Emoji"><svg class="ic"><use href="#i-smile"/></svg></button>
-                <button type="submit" id="send-btn" class="icon-btn send-btn" title="Gönder"><svg class="ic"><use href="#i-send"/></svg></button>
-              </div>
-            </div>
-          </form>
-          <div id="drop-zone" class="drop-zone" hidden>
-            <div><svg class="ic"><use href="#i-image"/></svg><b>Dosyaları buraya bırak</b><span>Görsel, video, ses ya da dosya (en fazla <span id="drop-max">25</span> MB)</span></div>
-          </div>
-        </section>
-      </div>
+      <div id="screens" class="screens"></div>
+      <div id="participants" class="participants" aria-live="polite"></div>
     </main>
 
-    <!-- Sağ: müzik -->
-    <aside id="music-panel" class="music-panel" aria-label="Müzik">
-      <header class="mp-head">
-        <svg class="ic"><use href="#i-music"/></svg>
-        <span>Müzik</span>
-        <span id="music-dot" class="live-dot" hidden></span>
-        <span class="spacer"></span>
-        <button id="m-off" class="mp-switch" type="button" role="switch" aria-checked="false">Bende kapat</button>
-        <button id="music-close" class="icon-btn mobile-only" title="Kapat"><svg class="ic"><use href="#i-x"/></svg></button>
-      </header>
-      <div class="mp-body">
-        <form id="music-form" class="mp-search" autocomplete="off">
-          <svg class="ic"><use href="#i-search"/></svg>
-          <input id="music-input" maxlength="300" placeholder="Şarkı ara ya da link yapıştır" aria-label="Şarkı adı ya da YouTube/SoundCloud linki">
-          <button class="btn primary small" type="submit">Ekle</button>
+    <!-- Sağ: sohbet ve müzik -->
+    <aside class="chat" id="chat-panel">
+      <div class="side-tabs" role="tablist">
+        <button class="side-tab active" data-tab="chat" role="tab"><svg class="ic"><use href="#i-chat"/></svg> Sohbet</button>
+        <button class="side-tab" data-tab="music" role="tab"><svg class="ic"><use href="#i-music"/></svg> Müzik <span id="music-dot" class="live-dot" hidden></span></button>
+      </div>
+
+      <div id="tab-chat" class="tab-body">
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form" class="chat-form" autocomplete="off">
+          <input id="chat-input" maxlength="500" placeholder="Mesaj gönder… (/play şarkı)">
+          <button class="btn primary" type="submit">Gönder</button>
         </form>
-        <div id="music-results" class="mp-results" hidden></div>
+      </div>
+
+      <div id="tab-music" class="tab-body music tab-off">
+        <form id="music-form" class="music-form" autocomplete="off">
+          <input id="music-input" maxlength="300" placeholder="YouTube / SoundCloud linki" aria-label="YouTube ya da SoundCloud linki veya şarkı adı">
+          <button class="btn primary" type="submit">Ekle</button>
+        </form>
+
+        <p id="music-empty" class="hint">Şu an müzik çalmıyor. Bir link (ya da arama açıksa şarkı adı) ekle; kanaldaki herkeste aynı anda çalar.</p>
         <p id="music-note" class="error" hidden></p>
 
-        <div id="music-empty" class="mp-empty">
-          <div class="mp-empty-ic"><svg class="ic"><use href="#i-music"/></svg></div>
-          <b>Henüz müzik yok</b>
-          <span>Bir şarkı ara ya da YouTube / SoundCloud linki yapıştır. Kanaldaki herkeste aynı anda çalar.</span>
-        </div>
-
-        <div id="now-playing" class="np" hidden>
-          <div id="np-art-wrap" class="np-art"><img id="np-art" alt=""><svg class="ic"><use href="#i-music"/></svg></div>
+        <div id="now-playing" class="now-playing" hidden>
           <div id="player-box" class="player-box"></div>
-          <div class="np-meta">
-            <div id="np-title" class="np-title"></div>
-            <div id="np-sub" class="np-sub"></div>
-          </div>
-          <div class="np-progress">
-            <span id="np-cur" class="num">0:00</span>
-            <div id="np-bar" class="np-bar" title="Herkes için bu konuma sar"><div id="np-fill" class="np-fill"></div></div>
-            <span id="np-dur" class="num">—</span>
-          </div>
+          <div id="np-title" class="np-title"></div>
+          <div id="np-sub" class="np-sub"></div>
           <div class="np-controls">
-            <button id="m-shuffle" class="icon-btn" title="Sırayı karıştır"><svg class="ic"><use href="#i-shuffle"/></svg></button>
-            <button id="m-prev" class="icon-btn" title="Önceki şarkı"><svg class="ic"><use href="#i-prev"/></svg></button>
-            <button id="m-pause" class="icon-btn play" title="Duraklat"><svg class="ic"><use href="#i-pause"/></svg></button>
-            <button id="m-skip" class="icon-btn" title="Sonraki şarkı"><svg class="ic"><use href="#i-next"/></svg></button>
+            <button id="m-prev" class="icon-btn" title="Önceki şarkı (herkes için)"><svg class="ic"><use href="#i-prev"/></svg></button>
+            <button id="m-pause" class="icon-btn play" title="Duraklat (herkes için)"><svg class="ic"><use href="#i-pause"/></svg></button>
+            <button id="m-skip" class="icon-btn" title="Geç (herkes için)"><svg class="ic"><use href="#i-next"/></svg></button>
             <button id="m-loop" class="icon-btn loop-btn" title="Tekrar: kapalı" data-mode="off"><svg class="ic"><use href="#i-repeat"/></svg></button>
-          </div>
-          <div class="np-secondary">
+            <button id="m-stop" class="icon-btn" title="Durdur ve sırayı temizle"><svg class="ic"><use href="#i-stop"/></svg></button>
+            <button id="m-off" class="btn ghost music-off" type="button">Bende kapat</button>
             <span class="vol-wrap" title="Müzik sesi (sadece senin için)"><svg class="ic"><use href="#i-speaker"/></svg><input type="range" id="m-vol" min="0" max="100" value="35" aria-label="Müzik sesi"><span id="m-vol-val" class="num">35%</span></span>
-            <button id="m-stop" class="icon-btn" title="Müziği durdur ve sırayı temizle"><svg class="ic"><use href="#i-stop"/></svg></button>
           </div>
         </div>
 
-        <section class="mp-section">
-          <div class="mp-sec-head"><span id="queue-head">Sıradakiler</span><span id="queue-count" class="muted"></span></div>
-          <ol id="music-queue" class="mp-list"></ol>
-          <p id="queue-empty" class="mp-hint">Sıra boş. Eklediğin şarkılar burada sıralanır.</p>
-        </section>
+        <div id="queue-head" class="queue-head" hidden>Sıradakiler</div>
+        <ol id="music-queue" class="music-queue"></ol>
 
-        <section id="history-wrap" class="mp-section" hidden>
-          <div class="mp-sec-head"><span>Son çalınanlar</span></div>
-          <ul id="music-history" class="mp-list history"></ul>
-        </section>
+        <div id="history-wrap" hidden>
+          <div class="queue-head">Son çalınanlar</div>
+          <ul id="music-history" class="music-queue history"></ul>
+        </div>
 
-        <p class="mp-hint">Müzik herkesin kendi cihazında çalar, mikrofondan gitmez; ses seviyesi sadece senin için. Sohbette <b>/play</b>, <b>/skip</b>, <b>/prev</b>, <b>/loop</b>, <b>/stop</b> da çalışır.</p>
+        <p class="hint">Müzik herkesin kendi cihazında çalar, mikrofondan gönderilmez; ses seviyesi sadece senin için. İnternetini korumak için <b>Bende kapat</b>. Sohbette <b>/play</b>, <b>/skip</b>, <b>/prev</b>, <b>/loop</b>, <b>/stop</b> da kullanılabilir.</p>
       </div>
     </aside>
   </section>
@@ -303,14 +238,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" hidden></div>
-
-  <!-- Görsel büyütme -->
-  <div id="lightbox" class="lightbox" hidden>
-    <img id="lb-img" alt="">
-    <div class="lb-bar"><span id="lb-name"></span><a id="lb-open" target="_blank" rel="noopener">Orijinali aç</a></div>
-  </div>
-  <!-- Emoji ve tepki seçicileri -->
-  <div id="emoji-pop" class="emoji-pop" hidden></div>
 
   <!-- Kişi menüsü: soldaki listede ⋯ / sağ tık (telefonda kişinin kutusuna dokun) -->
   <div id="member-menu" class="member-menu" role="dialog" aria-label="Kullanıcı ayarları" hidden>

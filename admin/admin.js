@@ -125,7 +125,6 @@
         [s.streamOn ? 'Açık' : 'Kapalı', 'Müzik akışı (yt-dlp)', s.streamOn ? 'ok' : 'warn'],
         [s.turn ? 'Ayarlı' : 'Yok', 'TURN sunucusu', s.turn ? 'ok' : 'warn'],
         [state.bans.length, 'Aktif yasak'],
-        [`${s.uploads.count} · ${mb(s.uploads.bytes)}`, 'Paylaşılan dosya'],
       ].map(([v, k, cls]) => el('div', { class: 'stat ' + (cls || '') }, el('div', { class: 'v' }, v), el('div', { class: 'k' }, k)))
     );
     $('#who').textContent = state.user;
@@ -219,7 +218,7 @@
             el('span', { class: 'room-name' }, r.name),
             el('span', { class: 'badge' }, `${r.size} kişi`),
             r.locked && el('span', { class: 'badge lock' }, 'KİLİTLİ'),
-            el('span', { class: 'room-meta' }, `açık: ${ago(r.createdAt)} · ${r.chatCount} mesaj`),
+            el('span', { class: 'room-meta' }, `açık: ${ago(r.createdAt)}`),
             r.music && r.music.title && el('span', { class: 'room-meta' }, `🎵 ${r.music.paused ? '(duraklatıldı) ' : ''}${r.music.title}${r.music.queue ? ` · sırada ${r.music.queue}` : ''}`),
             el(
               'div',
@@ -242,16 +241,6 @@
                 },
                 'Duyuru'
               ),
-              r.chatCount > 0 &&
-                el(
-                  'button',
-                  {
-                    class: 'btn small',
-                    type: 'button',
-                    onclick: () => act({ action: 'chat-clear', room: r.name }, 'Sohbet temizlendi', `"${r.name}" sohbeti ve paylaşılan dosyalar silinsin mi?`),
-                  },
-                  'Sohbeti temizle'
-                ),
               el(
                 'button',
                 { class: 'btn small', type: 'button', onclick: () => act({ action: 'lock', room: r.name, locked: !r.locked }, r.locked ? 'Kilit açıldı' : 'Kanal kilitlendi') },

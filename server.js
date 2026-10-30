@@ -15,12 +15,6 @@ const { Readable } = require('stream');
 const { createYouTube, parseYouTubeId, parseSoundCloudUrl, looksLikeUrl, cleanTitle } = require('./sources');
 const { createYtDlp } = require('./ytdlp');
 const { createAdmin } = require('./admin');
-const { createUploads } = require('./uploads');
-
-// Mesajlara bırakılabilecek tepkiler
-const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀', '💯', '🙏', '😡', '✅'];
-const CHAT_HISTORY = 100;
-const ytThumb = (id) => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
@@ -172,28 +166,6 @@ function createServer(options = {}) {
   /** Akış izni: kişiye özel anahtar → üye */
   const streamTokens = new Map();
   const musicStartDelay = options.musicStartDelayMs ?? MUSIC_START_DELAY_MS;
-
-  // Sohbet geçmişi (oda başına son 100 mesaj, bellekte) ve paylaşılan dosyalar
-  const roomChat = new Map();
-  const uploads =
-    options.uploads ||
-    createUploads({
-      dir: env.UPLOAD_DIR || path.join(__dirname, 'uploads'),
-      maxBytes: (Number(env.UPLOAD_MAX_MB) || 25) * 1048576,
-      maxTotalBytes: (Number(env.UPLOAD_MAX_TOTAL_MB) || 2048) * 1048576,
-      ttlMs: (Number(env.UPLOAD_TTL_HOURS) || 24) * 3600 * 1000,
-      log,
-    });
-  function chatOf(roomName) {
-    let c = roomChat.get(roomName);
-    if (!c) roomChat.set(roomName, (c = []));
-    return c;
-  }
-  function pushChat(roomName, msg) {
-    const c = chatOf(roomName);
-    c.push(msg);
-    if (c.length > CHAT_HISTORY) c.splice(0, c.length - CHAT_HISTORY);
-  }
   const musicEndGrace = options.musicEndGraceMs ?? MUSIC_END_GRACE_MS;
 
   /**
@@ -236,7 +208,7 @@ function createServer(options = {}) {
 
   /** Çalan şarkının sıra/geçmiş için sade hali */
   function asItem(cur) {
-    return { key: cur.itemKey, source: cur.source || 'yt', id: cur.id, title: cur.title, author: cur.author, by: cur.by, duration: cur.duration || null, thumb: cur.thumb || null };
+    return { key: cur.itemKey, source: cur.source || 'yt', id: cur.id, title: cur.title, author: cur.author, by: cur.by, duration: cur.duration || null };
   }
 
   function startItem(roomName, item) {
@@ -426,41 +398,6 @@ function createServer(options = {}) {
     res.setHeader('Permissions-Policy', 'microphone=(self), camera=(self), display-capture=(self)');
   }
 
-  /** POST /upload?k=<kişi anahtarı>&name=<dosya adı>&w=&h= — gövde dosyanın kendisidir */
-  async function handleUpload(req, res, url) {
-    await streamReady;
-    const reply = (status, body) => {
-      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify(body));
-    };
-    const mem = streamTokens.get(url.searchParams.get('k') || '');
-    const room = mem && rooms.get(mem.room);
-    if (!room || room.get(mem.id) !== mem) {
-      req.resume();
-      return reply(403, { error: 'Dosya yüklemek için kanalda olmalısın.' });
-    }
-    const now = Date.now();
-    mem.uploadTimes = (mem.uploadTimes || []).filter((t) => now - t < 60000);
-    if (mem.uploadTimes.length >= 20) {
-      req.resume();
-      return reply(429, { error: 'Çok hızlı dosya yüklüyorsun, biraz bekle.' });
-    }
-    mem.uploadTimes.push(now);
-    try {
-      const f = await uploads.save(req, {
-        room: mem.room,
-        uploader: mem.id,
-        name: url.searchParams.get('name'),
-        type: req.headers['content-type'],
-        width: url.searchParams.get('w'),
-        height: url.searchParams.get('h'),
-      });
-      reply(200, uploads.publicInfo(f));
-    } catch (err) {
-      reply(err.status || 500, { error: err.status ? err.message : 'Dosya kaydedilemedi.' });
-    }
-  }
-
   function handleHttp(req, res) {
     securityHeaders(res);
     const url = new URL(req.url, 'http://x');
@@ -480,19 +417,6 @@ function createServer(options = {}) {
       for (const r of rooms.values()) members += r.size;
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify({ ok: true, rooms: rooms.size, members, uptime: Math.round(process.uptime()) }));
-      return;
-    }
-
-    if (pathname === '/upload' && req.method === 'POST') {
-      handleUpload(req, res, url).catch((err) => {
-        log('upload', err.message);
-        if (!res.headersSent) res.writeHead(500);
-        res.end();
-      });
-      return;
-    }
-    if (pathname.startsWith('/files/') && (req.method === 'GET' || req.method === 'HEAD')) {
-      uploads.serve(req, res, pathname.split('/')[2] || '');
       return;
     }
 
@@ -575,8 +499,6 @@ function createServer(options = {}) {
     if (room.size === 0) {
       rooms.delete(roomName);
       roomMeta.delete(roomName);
-      roomChat.delete(roomName);
-      uploads.removeRoom(roomName);
       const m = music.get(roomName);
       if (m) clearTimeout(m.endTimer);
       music.delete(roomName);
@@ -599,7 +521,6 @@ function createServer(options = {}) {
     let windowStart = Date.now();
     let windowCount = 0;
     let chatTimes = [];
-    let searchTimes = [];
     let musicTimes = [];
 
     /** Bu soket şu an hangi üyeye bağlı */
@@ -734,8 +655,6 @@ function createServer(options = {}) {
             iceServers: buildIceServers(env),
             music: musicSnapshot(roomName),
             streamToken: member.streamToken,
-            chat: chatOf(roomName),
-            uploadMaxMB: Math.round(uploads.maxBytes / 1048576),
           });
           return;
         }
@@ -762,71 +681,14 @@ function createServer(options = {}) {
 
         case 'chat': {
           if (!member || member.ws !== ws) return;
-          const text = typeof msg.text === 'string' ? msg.text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, 2000) : '';
-          // Ekler: bu kişinin bu kanala yüklediği dosyalar (en fazla 10)
-          const files = (Array.isArray(msg.files) ? msg.files : [])
-            .slice(0, 10)
-            .map((id) => uploads.get(String(id)))
-            .filter((f) => f && f.room === member.room && f.uploader === member.id)
-            .map((f) => uploads.publicInfo(f));
-          if (!text && !files.length) return;
+          const text = typeof msg.text === 'string' ? msg.text.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim().slice(0, 500) : '';
+          if (!text) return;
           chatTimes = chatTimes.filter((t) => now - t < 5000);
           if (chatTimes.length >= 8) return;
           chatTimes.push(now);
           member.chatCount = (member.chatCount || 0) + 1;
-          const out = { id: crypto.randomBytes(8).toString('hex'), from: member.id, name: member.name, text, ts: now, files, reactions: {} };
-          pushChat(member.room, out);
-          broadcast(member.room, { t: 'chat', ...out });
-          return;
-        }
-
-        case 'chat-delete': {
-          // Sadece kendi mesajını silebilir; ekleri de silinir
-          if (!member || member.ws !== ws) return;
-          const c = chatOf(member.room);
-          const i = c.findIndex((m) => m.id === msg.id);
-          if (i < 0 || c[i].from !== member.id) return;
-          const [gone] = c.splice(i, 1);
-          for (const f of gone.files || []) uploads.remove(f.id);
-          broadcast(member.room, { t: 'chat-delete', id: gone.id });
-          return;
-        }
-
-        case 'chat-react': {
-          if (!member || member.ws !== ws || !REACTIONS.includes(msg.emoji)) return;
-          const m = chatOf(member.room).find((x) => x.id === msg.id);
-          if (!m || m.admin) return;
-          const list = m.reactions[msg.emoji] || [];
-          const i = list.indexOf(member.id);
-          if (i >= 0) list.splice(i, 1);
-          else list.push(member.id);
-          if (list.length) m.reactions[msg.emoji] = list;
-          else delete m.reactions[msg.emoji];
-          broadcast(member.room, { t: 'chat-react', id: m.id, reactions: m.reactions });
-          return;
-        }
-
-        case 'typing': {
-          if (!member || member.ws !== ws) return;
-          if (member.typingAt && now - member.typingAt < 1500) return;
-          member.typingAt = now;
-          broadcast(member.room, { t: 'typing', from: member.id, name: member.name }, member.id);
-          return;
-        }
-
-        case 'music-search': {
-          // Şarkı adıyla arama: sonuçlar sadece arayan kişiye gider, o seçer
-          if (!member || member.ws !== ws) return;
-          const q = typeof msg.q === 'string' ? msg.q.trim().slice(0, 200) : '';
-          if (!q) return;
-          searchTimes = searchTimes.filter((t) => now - t < 30000);
-          if (searchTimes.length >= 10) return send(ws, { t: 'music-results', q, error: 'Çok hızlı arıyorsun, biraz bekle.' });
-          searchTimes.push(now);
-          const asker = ws;
-          const run = streamOn ? ytdlp.search(q, 6) : youtube.searchList(q);
-          Promise.resolve(run)
-            .then((items) => send(asker, { t: 'music-results', q, items: items.map((v) => ({ ...v, thumb: ytThumb(v.id) })) }))
-            .catch((err) => send(asker, { t: 'music-results', q, error: streamOn ? `Arama başarısız: ${ytdlp.explain(err)}.` : err.message }));
+          const out = { t: 'chat', from: member.id, name: member.name, text, ts: now };
+          broadcast(member.room, out);
           return;
         }
 
@@ -870,8 +732,7 @@ function createServer(options = {}) {
               const m = musicOf(adder.room);
               if (m.queue.length >= MUSIC_QUEUE_MAX) return;
               const v = res.item;
-              const source = v.source || 'yt';
-              const item = { key: newKey(), source, id: v.id, title: v.title, author: v.author || null, by: adder.name, duration: v.duration || null, thumb: v.thumb || (source === 'yt' ? ytThumb(v.id) : null) };
+              const item = { key: newKey(), source: v.source || 'yt', id: v.id, title: v.title, author: v.author || null, by: adder.name, duration: v.duration || null };
               m.queue.push(item);
               const startNow = !m.current;
               if (startNow) startItem(adder.room, m.queue.shift());
@@ -880,46 +741,6 @@ function createServer(options = {}) {
               broadcastMusic(adder.room, event);
             })
             .catch((err) => log('music-add', err));
-          return;
-        }
-
-        case 'music-seek': {
-          // Herkes için belirli bir konuma sar
-          if (!member || member.ws !== ws) return;
-          const m = music.get(member.room);
-          const cur = m && m.current;
-          let pos = Number(msg.pos);
-          if (!cur || !Number.isFinite(pos)) return;
-          pos = Math.max(0, cur.duration ? Math.min(pos, cur.duration - 1) : pos);
-          if (cur.pausedAt != null) cur.pausedAt = pos;
-          else cur.startedAt = now - pos * 1000;
-          scheduleMusicEnd(member.room);
-          const mm = Math.floor(pos / 60);
-          broadcastMusic(member.room, `⏩ ${member.name} şarkıyı ${mm}:${String(Math.floor(pos % 60)).padStart(2, '0')} konumuna sardı`);
-          return;
-        }
-
-        case 'music-shuffle': {
-          if (!member || member.ws !== ws) return;
-          const m = music.get(member.room);
-          if (!m || m.queue.length < 2) return;
-          for (let i = m.queue.length - 1; i > 0; i--) {
-            const j = crypto.randomInt(i + 1);
-            [m.queue[i], m.queue[j]] = [m.queue[j], m.queue[i]];
-          }
-          broadcastMusic(member.room, `🔀 ${member.name} sırayı karıştırdı`);
-          return;
-        }
-
-        case 'music-move': {
-          // Sıradaki şarkıyı "sıradaki" yap (en başa al)
-          if (!member || member.ws !== ws) return;
-          const m = music.get(member.room);
-          const i = m ? m.queue.findIndex((q) => q.key === msg.key) : -1;
-          if (i <= 0) return;
-          const [it] = m.queue.splice(i, 1);
-          m.queue.unshift(it);
-          broadcastMusic(member.room, `⏫ ${member.name} sıradakine aldı: ${it.title}`);
           return;
         }
 
@@ -1043,7 +864,7 @@ function createServer(options = {}) {
                   const mm = music.get(roomName);
                   if (!mm || mm.current !== cur) return; // bu arada değişti
                   if (alt) {
-                    startItem(roomName, { key: cur.itemKey, source: 'yt', id: alt.id, title: alt.title, author: alt.author, by: cur.by, duration: alt.duration, thumb: ytThumb(alt.id) });
+                    startItem(roomName, { key: cur.itemKey, source: 'yt', id: alt.id, title: alt.title, author: alt.author, by: cur.by, duration: alt.duration });
                     broadcastMusic(roomName, `🔄 "${cur.title}" çalınamadı (${reason}); yerine çalınabilen versiyonu: ${alt.title}`);
                   } else {
                     advance(roomName, 'failed');
@@ -1101,7 +922,6 @@ function createServer(options = {}) {
   server.on('close', () => clearInterval(hb));
 
   function close() {
-    uploads.close();
     return new Promise((resolve) => {
       for (const room of rooms.values()) for (const m of room.values()) clearTimeout(m.graceTimer);
       for (const m of music.values()) clearTimeout(m.endTimer);
@@ -1209,21 +1029,9 @@ function createServer(options = {}) {
     logEvent('admin', `${by}: "${roomName}" müzik ${what === 'skip' ? 'geçildi' : 'durduruldu'}`);
   }
 
-  function clearChat(roomName, by) {
-    if (!rooms.has(roomName)) throw new Error('kanal bulunamadı');
-    for (const m of chatOf(roomName)) for (const f of m.files || []) uploads.remove(f.id);
-    roomChat.set(roomName, []);
-    broadcast(roomName, { t: 'chat-clear' });
-    logEvent('admin', `${by}: "${roomName}" sohbeti temizlendi`);
-  }
-
   function announce(roomName, text, by) {
     const targets = roomName ? [roomName] : [...rooms.keys()];
-    for (const r of targets) {
-      const msg = { id: crypto.randomBytes(8).toString('hex'), from: 'admin', admin: true, name: 'Yönetici', text, ts: Date.now(), files: [], reactions: {} };
-      pushChat(r, msg);
-      broadcast(r, { t: 'chat', ...msg });
-    }
+    for (const r of targets) broadcast(r, { t: 'chat', from: 'admin', admin: true, name: 'Yönetici', text, ts: Date.now() });
     logEvent('admin', `${by}: duyuru (${roomName ? '"' + roomName + '"' : 'tüm kanallar'}): ${text}`);
     return { rooms: targets.length };
   }
@@ -1242,9 +1050,6 @@ function createServer(options = {}) {
       turnConfigured: !!env.TURN_URLS,
       streamOn: () => streamOn,
       socketCount: () => wss.clients.size,
-      uploadStats: () => uploads.stats(),
-      chatCount: (roomName) => chatOf(roomName).length,
-      clearChat,
       findMember,
       kickMember,
       banIp,

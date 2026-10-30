@@ -177,13 +177,6 @@ Sonra: https://voicechat.ituacm.com/admin
 - IP ve olay günlüğü sadece bellekte tutulur; diske yazılmaz, sunucu yeniden başlayınca silinir (yasaklar da).
 - Ek güvenlik isterseniz nginx'te `/admin`'i kendi IP'nizle sınırlayabilir ya da Cloudflare Access ile koruyabilirsiniz.
 
-## Sohbette dosya paylaşımı
-
-Dosyalar konteynerin `uploads` biriminde tutulur; 24 saat sonra ya da kanal boşalınca silinir, toplam 2 GB'ı geçmez.
-nginx ayarında `location = /upload` bloğu olmalı (`client_max_body_size 30m`); yoksa 1 MB'tan büyük dosyalar
-"Dosya çok büyük" hatası verir. Sınırları `.env` ile değiştirebilirsiniz: `UPLOAD_MAX_MB`, `UPLOAD_MAX_TOTAL_MB`, `UPLOAD_TTL_HOURS`
-(`UPLOAD_MAX_MB`'ı 25'in üstüne çıkarırsanız nginx'teki `client_max_body_size`'ı da artırın).
-
 ## Sorun giderme
 - **Bir kişinin kartı "Bağlantı kurulamıyor (ağ kısıtlaması)" diyor:** TURN çalışıyor mu kontrol et (adım 6). 3478 ve 49160-49260 portlarının firewall'da açık olduğundan emin ol.
 - **Loglar:** `sudo docker logs -f riftvoice` (uygulama), `sudo docker logs -f riftvoice-turn` (TURN)
