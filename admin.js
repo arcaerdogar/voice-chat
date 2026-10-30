@@ -128,6 +128,7 @@ function createAdmin(ctx, env) {
         return res.end();
       }
       res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+      if (path.extname(file) === '.html' && ctx.withAssetVersions) data = ctx.withAssetVersions(data.toString('utf8'), ADMIN_DIR, '/admin/');
       res.end(data);
     });
   }
@@ -171,6 +172,7 @@ function createAdmin(ctx, env) {
         createdAt: meta.createdAt || null,
         locked: !!meta.locked,
         size: room.size,
+        chatCount: ctx.chatCount ? ctx.chatCount(name) : 0,
         music: m && m.current ? { title: m.current.title, paused: m.current.pausedAt != null, queue: m.queue.length, loop: m.loop } : m ? { title: null, queue: m.queue.length, loop: m.loop } : null,
         members: list,
       });
@@ -190,6 +192,7 @@ function createAdmin(ctx, env) {
         streamOn: ctx.streamOn(),
         turn: ctx.turnConfigured,
         maxRoomSize: ctx.maxRoomSize,
+        uploads: ctx.uploadStats ? ctx.uploadStats() : { count: 0, bytes: 0 },
       },
       rooms,
       bans: [...ctx.bans].map(([ip, b]) => ({ ip, ...b })).filter((b) => !b.until || b.until > now),
@@ -222,6 +225,8 @@ function createAdmin(ctx, env) {
         return ctx.lockRoom(room, !!body.locked, by);
       case 'close-room':
         return ctx.closeRoom(room, by);
+      case 'chat-clear':
+        return ctx.clearChat(room, by);
       case 'music-stop':
       case 'music-skip':
         return ctx.musicControl(room, action === 'music-skip' ? 'skip' : 'stop', by);

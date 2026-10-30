@@ -72,7 +72,8 @@ async function fetchSoundCloud(url, fetchImpl = fetch) {
     const author = typeof j.author_name === 'string' ? j.author_name.slice(0, 60) : null;
     let title = typeof j.title === 'string' ? j.title : 'SoundCloud parçası';
     if (author && title.endsWith(' by ' + author)) title = title.slice(0, -(' by ' + author).length);
-    return { id: api && /^https:\/\/api\.soundcloud\.com\/tracks\/\d+$/.test(api) ? api : url, title: title.slice(0, 120), author };
+    const thumb = typeof j.thumbnail_url === 'string' && /^https:\/\//.test(j.thumbnail_url) ? j.thumbnail_url : null;
+    return { id: api && /^https:\/\/api\.soundcloud\.com\/tracks\/\d+$/.test(api) ? api : url, title: title.slice(0, 120), author, thumb };
   } catch {
     return { error: 'SoundCloud şu an yanıt vermiyor.' };
   }
@@ -233,7 +234,7 @@ function createYouTube(opts = {}) {
       const info = await soundcloud(sc.url);
       if (info.notFound) return { error: 'SoundCloud parçası bulunamadı (gizli ya da silinmiş olabilir).' };
       if (info.error) return { error: info.error };
-      return { item: { source: 'sc', id: info.id, title: info.title, author: info.author, duration: null } };
+      return { item: { source: 'sc', id: info.id, title: info.title, author: info.author, duration: null, thumb: info.thumb || null } };
     }
 
     const id = parseYouTubeId(text);
@@ -291,7 +292,24 @@ function createYouTube(opts = {}) {
     }
   }
 
-  return { searchEnabled: !!apiKey, resolve, alternativeFor };
+  /** Şarkı adıyla arama: çalınabilir ilk sonuçlar (API anahtarı gerekir) */
+  async function searchList(q) {
+    if (!apiKey) throw new Error('Şarkı adıyla arama için sunucuda YouTube API anahtarı ayarlı değil. YouTube linki yapıştırın.');
+    try {
+      const ids = await searchIds(q);
+      if (!ids.length) return [];
+      const d = await details(ids);
+      return ids
+        .map((id) => d.get(id))
+        .filter((v) => v && v.playable)
+        .slice(0, 6)
+        .map((v) => ({ id: v.id, title: v.title, author: v.author, duration: v.duration }));
+    } catch (err) {
+      throw new Error(apiErrorText(err));
+    }
+  }
+
+  return { searchEnabled: !!apiKey, resolve, alternativeFor, searchList };
 }
 
 module.exports = { createYouTube, parseYouTubeId, parseSoundCloudUrl, looksLikeUrl, parseIsoDuration, cleanTitle, fetchOEmbed, fetchSoundCloud };

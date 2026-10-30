@@ -65,7 +65,8 @@ test('Müzik akışı (yt-dlp): isimle arama, sadece ses, senkron, yetki ve veri
     const ctx = await browser.newContext({ permissions: ['microphone'] });
     net[name] = { audioBytes: 0, youtube: 0 };
     ctx.on('request', (req) => {
-      if (/youtube\.com|googlevideo\.com|ytimg\.com/.test(req.url())) net[name].youtube++;
+      // Kapak görselleri (i.ytimg.com, ~10 KB) beklenen; video/oynatıcı trafiği olmamalı
+      if (/youtube\.com|googlevideo\.com/.test(req.url())) net[name].youtube++;
     });
     ctx.on('requestfinished', async (req) => {
       if (!req.url().includes('/music/audio/')) return;
@@ -82,12 +83,16 @@ test('Müzik akışı (yt-dlp): isimle arama, sadece ses, senkron, yetki ve veri
   }
   const [A, B] = pages;
   await A.waitForFunction(() => window.__rv.music.stream === true);
-  await A.click('.side-tab[data-tab=music]');
-  assert.match(await A.getAttribute('#music-input', 'placeholder'), /şarkı adı/);
+  assert.match(await A.getAttribute('#music-input', 'placeholder'), /Şarkı ara/);
 
-  // Şarkı adıyla ekle (API anahtarı yok)
+  // Şarkı adıyla ara (API anahtarı yok): sonuç listesi gelir, ilki seçilir
   await A.fill('#music-input', 'sezen aksu firuze');
   await A.click('#music-form button[type=submit]');
+  await A.waitForSelector('#music-results button.mp-result', { timeout: 30000 });
+  assert.ok((await A.locator('#music-results button.mp-result').count()) >= 3, 'birkaç sonuç listelenmeli');
+  assert.match(await A.textContent('#music-results'), /firuze/i);
+  await A.click('#music-results button.mp-result >> nth=0');
+  assert.equal(await A.isHidden('#music-results'), true);
   let s;
   for (const p of pages) s = await until(p, (s) => s.kind === 'stream' && s.st === 'playing' && s.time > 1, 45000, 'akıştan çalma');
   assert.match(s.title, /Firuze/i);
@@ -127,7 +132,6 @@ test('Müzik akışı (yt-dlp): isimle arama, sadece ses, senkron, yetki ve veri
   const rate = ((served() - s0) * 8) / ((Date.now() - t0) / 1000) / 1000;
   t.diagnostic(`Brand toplam ses verisi: ${(served() / 1e6).toFixed(2)} MB; son 10 sn: ${rate.toFixed(0)} kbit/sn`);
   assert.ok(served() > 200000, 'ses gerçekten sunucudan akmalı');
-  await B.click('.side-tab[data-tab=music]');
   await B.click('#m-off');
   await until(B, (s) => s.kind === null, 5000, 'oynatıcının kapanması');
   await new Promise((r) => setTimeout(r, 1000));
