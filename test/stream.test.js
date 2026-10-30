@@ -97,7 +97,7 @@ test('Müzik akışı (yt-dlp): isimle arama, sadece ses, senkron, yetki ve veri
   for (const p of pages) s = await until(p, (s) => s.kind === 'stream' && s.st === 'playing' && s.time > 1, 45000, 'akıştan çalma');
   assert.match(s.title, /Firuze/i);
   assert.ok(srv.musicForTest('akis').current.duration > 200, 'süre baştan bilinmeli');
-  assert.match(await B.textContent('#np-sub'), /sadece ses/);
+  assert.match(await B.textContent('#np-sub'), /ekleyen: Ahri/);
 
   // Senkron
   await new Promise((r) => setTimeout(r, 2500));

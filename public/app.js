@@ -183,6 +183,7 @@
     sending: false,
     mention: null, // { start, query, items, sel }
     welcomeHtml: '',
+    dingAt: 0,
     hidden: store.get('chatHidden', false),
   };
 
@@ -281,12 +282,21 @@
     else if (!quiet) $('#jump-new').hidden = false;
   }
 
-  function bumpUnread() {
+  /** Sohbet gizliyken gelen mesaj: sohbet düğmesinde rozet + kısa ses */
+  function bumpUnread(mentioned) {
     if (!chat.hidden) return;
     chat.unread++;
     const b = $('#chat-badge');
     b.textContent = chat.unread > 99 ? '99+' : chat.unread;
     b.hidden = false;
+    b.classList.remove('pop');
+    void b.offsetWidth; // animasyonu yeniden başlat
+    b.classList.add('pop');
+    // Bahsetmenin kendi sesi var; art arda mesajlarda ses en fazla 1,5 sn'de bir
+    if (!mentioned && !S.deafened && Date.now() - chat.dingAt > 1500) {
+      chat.dingAt = Date.now();
+      beep([740, 988], 0.06, 0.08);
+    }
   }
 
   const SYS_ICONS = { join: 'arrow-right', leave: 'arrow-left', music: 'music', admin: 'megaphone', info: 'info' };
@@ -381,7 +391,7 @@
     renderReactions(m.id);
     afterAppend(stick, own && !hist, !!hist);
     if (!hist && !own) {
-      bumpUnread();
+      bumpUnread(me);
       if (me) {
         beep([880, 1320], 0.07, 0.1);
         if (chat.hidden || document.hidden) toast('💬 ' + m.name + ' senden bahsetti', 4000);
@@ -1014,9 +1024,15 @@
       e.preventDefault();
       sp.setPointerCapture(e.pointerId);
       sp.classList.add('dragging');
+      const before = Number(body.style.getPropertyValue('--call-ratio')) || 0.44;
+      let collapse = false;
       const move = (ev) => {
         const r = body.getBoundingClientRect();
-        const v = Math.max(0.15, Math.min(0.85, (ev.clientY - r.top) / r.height));
+        const raw = (ev.clientY - r.top) / r.height;
+        // En alta yaklaşınca (son ~%8) bırakıldığında sohbet kapanır
+        collapse = raw > 0.92;
+        $('#chat-pane').classList.toggle('collapsing', collapse);
+        const v = Math.max(0.15, Math.min(collapse ? 0.97 : 0.85, raw));
         body.style.setProperty('--call-ratio', v.toFixed(3));
       };
       const up = () => {
@@ -1024,6 +1040,13 @@
         sp.removeEventListener('pointermove', move);
         sp.removeEventListener('pointerup', up);
         sp.removeEventListener('pointercancel', up);
+        $('#chat-pane').classList.remove('collapsing');
+        if (collapse) {
+          // Tekrar açılınca önceki boyutuna dönsün
+          body.style.setProperty('--call-ratio', before);
+          setChatHidden(true);
+          return;
+        }
         store.set('callRatio', Number(body.style.getPropertyValue('--call-ratio')) || 0.44);
         if (chat.stuck) scrollChatBottom();
       };
@@ -2777,24 +2800,10 @@
     one: { icon: 'repeat-one', title: 'Tekrar: tek şarkı (tıkla: kapalı)', next: 'off' },
   };
 
-  const ytThumb = (id) => 'https://i.ytimg.com/vi/' + encodeURIComponent(id) + '/mqdefault.jpg';
-  const thumbOf = (item) => (item ? item.thumb || (sourceOf(item) === 'yt' && item.id ? ytThumb(item.id) : null) : null);
-
-  /** Sıra/geçmiş satırı: küçük kapak, ad, süre, üzerine gelince işlemler */
+  /** Sıra/geçmiş satırı: şarkı adı, altında ekleyen; üzerine gelince işlemler */
   function mpItem(item, actions) {
     const li = document.createElement('li');
     li.className = 'mp-item';
-    const th = document.createElement('div');
-    th.className = 'mp-thumb';
-    const src = thumbOf(item);
-    if (src) {
-      const img = document.createElement('img');
-      img.src = src;
-      img.alt = '';
-      img.loading = 'lazy';
-      img.onerror = () => (th.innerHTML = svgIcon('music'));
-      th.appendChild(img);
-    } else th.innerHTML = svgIcon('music');
     const info = document.createElement('div');
     info.className = 'mp-info';
     info.style.minWidth = '0';
@@ -2804,13 +2813,8 @@
     t.title = item.title;
     const meta = document.createElement('div');
     meta.className = 'mp-meta';
-    meta.textContent = [sourceLabel(item, true), item.author, item.by].filter(Boolean).join(' · ');
+    meta.textContent = item.by ? 'ekleyen: ' + item.by : '';
     info.append(t, meta);
-    const side = document.createElement('div');
-    side.className = 'mp-side';
-    const dur = document.createElement('span');
-    dur.className = 'mp-dur';
-    dur.textContent = fmtDur(item.duration);
     const acts = document.createElement('div');
     acts.className = 'mp-acts';
     for (const [icon, title, fn, cls] of actions) {
@@ -2822,8 +2826,7 @@
       b.onclick = fn;
       acts.appendChild(b);
     }
-    side.append(dur, acts);
-    li.append(th, info, side);
+    li.append(info, acts);
     return li;
   }
 
@@ -2841,23 +2844,7 @@
     if (cur) {
       $('#np-title').textContent = cur.title;
       $('#np-title').title = cur.title;
-      $('#np-sub').textContent = [sourceLabel(cur), cur.author, 'ekleyen: ' + cur.by].filter(Boolean).join(' · ');
-      $('#np-sub').title =
-        sourceOf(cur) === 'sc'
-          ? 'SoundCloud: sadece ses (saatte ~70 MB)'
-          : S.music.stream
-            ? 'YouTube, sunucudan sadece ses olarak (saatte ~60 MB)'
-            : 'YouTube: video + ses (saatte ~350 MB)';
-      const src = thumbOf(cur);
-      const art = $('#np-art');
-      if (src) {
-        if (art.getAttribute('src') !== src) art.src = src;
-        art.hidden = false;
-      } else {
-        art.removeAttribute('src');
-        art.hidden = true;
-      }
-      $('#np-art-wrap').classList.toggle('has-img', !!src);
+      $('#np-sub').textContent = cur.by ? 'ekleyen: ' + cur.by : '';
       $('#m-pause').innerHTML = svgIcon(cur.pausedAt != null ? 'play' : 'pause');
       $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
     }
@@ -2875,8 +2862,7 @@
       acts.push(['x', 'Sıradan çıkar', () => wsSend({ t: 'music-remove', key: item.key }), 'rm']);
       list.appendChild(mpItem(item, acts));
     });
-    const total = q.reduce((a, it) => a + (it.duration || 0), 0);
-    $('#queue-count').textContent = q.length ? q.length + ' şarkı' + (total ? ' · ' + fmtDur(total) : '') : '';
+    $('#queue-count').textContent = q.length ? q.length + ' şarkı' : '';
     $('#queue-empty').hidden = q.length > 0;
 
     const hist = $('#music-history');
@@ -2891,13 +2877,10 @@
     updateProgress();
   }
 
-  /** YouTube videosu oynatıcıda görünür; sadece ses çalarken (akış) kapak gösterilir */
+  /** Gömülü oynatıcı (YouTube videosu / SoundCloud) sadece gerektiğinde görünür; sadece ses akışında hiçbir şey gösterilmez */
   function renderArtVisibility() {
     const cur = S.music.current;
-    const kind = cur ? playerKindFor(cur) : null;
-    const showPlayer = !!cur && !S.musicOff && kind !== 'stream';
-    $('#player-box').hidden = !showPlayer;
-    $('#np-art-wrap').hidden = showPlayer;
+    $('#player-box').hidden = !cur || S.musicOff || playerKindFor(cur) === 'stream';
   }
 
   function musicDuration(cur) {
@@ -2981,7 +2964,7 @@
       for (let i = 0; i < 3; i++) {
         const sk = document.createElement('div');
         sk.className = 'mp-result';
-        sk.innerHTML = '<span class="sk"></span><span><div class="sk-line" style="width:90%"></div><div class="sk-line" style="width:50%"></div></span>';
+        sk.innerHTML = '<span><div class="sk-line" style="width:90%"></div><div class="sk-line" style="width:50%"></div></span>';
         box.appendChild(sk);
       }
       return;
@@ -2997,9 +2980,6 @@
       b.type = 'button';
       b.className = 'mp-result';
       b.title = 'Sıraya ekle: ' + it.title;
-      const img = document.createElement('img');
-      img.alt = '';
-      img.src = it.thumb || ytThumb(it.id);
       const info = document.createElement('span');
       info.style.minWidth = '0';
       const t = document.createElement('span');
@@ -3009,7 +2989,7 @@
       meta.className = 'mpr-meta';
       meta.textContent = [it.author, fmtDur(it.duration)].filter(Boolean).join(' · ');
       info.append(t, meta);
-      b.append(img, info);
+      b.append(info);
       b.onclick = () => pickMusicResult(it);
       box.appendChild(b);
     }
@@ -3942,7 +3922,6 @@
     $('#m-skip').onclick = () => wsSend({ t: 'music-skip' });
     $('#m-prev').onclick = () => wsSend({ t: 'music-prev' });
     $('#m-loop').onclick = () => wsSend({ t: 'music-loop', mode: (LOOP_INFO[S.music.loop] || LOOP_INFO.off).next });
-    $('#m-stop').onclick = () => wsSend({ t: 'music-stop' });
     $('#m-off').onclick = () => {
       S.musicOff = !S.musicOff;
       store.set('musicOff', S.musicOff);

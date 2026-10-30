@@ -178,7 +178,8 @@ test('Müzik: herkes aynı şarkıyı aynı anda çalar, kontroller herkese yans
   assert.equal(await A.getAttribute('#m-loop', 'data-mode'), 'one');
 
   // Durdur: müzik herkeste durur
-  await A.click('#m-stop');
+  await A.fill('#chat-input', '/stop');
+  await A.press('#chat-input', 'Enter');
   for (const p of pages) await until(p, (s) => s.id === null && s.ytState !== PLAYING, 8000, 'durma');
   assert.equal(await B.isHidden('#np-pill'), true);
   for (const l of logs) t.diagnostic(l);

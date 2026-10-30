@@ -220,6 +220,19 @@ test('sohbet: mesajlar, dosyalar ve geçmiş', { timeout: 180000 }, async (t) =>
     await B.click('#chat-toggle');
     assert.equal(await B.isVisible('#chat-pane'), true);
     assert.equal(await B.isHidden('#chat-badge'), true);
+    // Ayırıcı en alta sürüklenince sohbet kapanır, düğmeyle eski boyutunda açılır
+    const before = await B.evaluate(() => document.querySelector('#chat-pane').offsetHeight);
+    const sp = await B.locator('#splitter').boundingBox();
+    const bodyBox = await B.locator('.stage-body').boundingBox();
+    await B.mouse.move(sp.x + sp.width / 2, sp.y + 3);
+    await B.mouse.down();
+    await B.mouse.move(sp.x + sp.width / 2, bodyBox.y + bodyBox.height - 4, { steps: 8 });
+    await B.mouse.up();
+    assert.equal(await B.isHidden('#chat-pane'), true);
+    await B.click('#chat-toggle');
+    assert.equal(await B.isVisible('#chat-pane'), true);
+    const after = await B.evaluate(() => document.querySelector('#chat-pane').offsetHeight);
+    assert.ok(Math.abs(after - before) < 4, `sohbet eski boyutuna dönmeli: ${before} → ${after}`);
   });
 
   await t.test('sonradan gelen geçmişi görür', async () => {
