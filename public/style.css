@@ -157,7 +157,8 @@ input[type=checkbox], input[type=radio] { width: auto; accent-color: var(--accen
 
 /* Orta alan */
 .stage { background: var(--bg-1); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.stage-head { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 12px 0 16px; background: var(--bg-3); color: var(--muted); box-shadow: 0 1px 0 var(--sep); }
+.stage-head { display: none; }
+.stage-head { height: 48px; flex: none; align-items: center; gap: 8px; padding: 0 12px 0 16px; background: var(--bg-3); color: var(--muted); box-shadow: 0 1px 0 var(--sep); }
 .stage-head strong { color: var(--head); }
 .head-div { width: 1px; height: 24px; background: var(--line); margin: 0 4px; }
 .head-desc { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -213,7 +214,7 @@ label.check span { font-weight: 500; }
   /* Sol panel: sadece bağlantı durumu ve kullanıcı paneli, altta sabit */
   .sidebar { grid-row: 2; }
   .side-head, .channels { display: none; }
-  .head-desc, .head-div { display: none; }
+  .stage-head { display: flex; }
   /* Kompakt kişi satırları: avatar solda, isim yanında, ses kaydırıcısı altta */
   .mobile-only { display: inline-grid; }
   /* Müzik paneli: kapalıyken gizlenmez, ekran dışına kayar (müzik çalmaya devam eder) */
@@ -356,7 +357,8 @@ label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight:
 .splitter:hover span, .splitter.dragging span { background: var(--accent); }
 .stage.chat-hidden .call { flex: 1; }
 .stage.chat-hidden .splitter, .stage.chat-hidden .chat-pane { display: none; }
-#chat-toggle .badge { top: -2px; right: -4px; }
+.chat-toggle-btn .badge { top: -2px; right: -4px; }
+.chat-toggle-btn.active { color: var(--head); }
 
 .chat-pane { flex: 1; min-height: 160px; display: flex; flex-direction: column; background: var(--bg-3); position: relative; }
 .chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 0 12px; overflow-anchor: none; }
@@ -517,11 +519,6 @@ label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight:
 .music-panel { background: var(--bg-2); border-left: 1px solid var(--sep); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .mp-head { height: 48px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 16px; font-weight: 700; color: var(--head); box-shadow: 0 1px 0 var(--sep); }
 .mp-head > .ic { color: var(--muted); }
-.mp-switch { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 4px 6px; border-radius: 4px; }
-.mp-switch::before { content: ''; width: 30px; height: 18px; border-radius: 99px; background: var(--bg-5); box-shadow: inset 0 0 0 2px var(--bg-5); flex: none; transition: background .15s; background-image: radial-gradient(circle at 9px 9px, #fff 6px, transparent 6.5px); }
-.mp-switch.on { color: #ff9a9d; }
-.mp-switch.on::before { background-color: var(--red-2); box-shadow: inset 0 0 0 2px var(--red-2); background-image: radial-gradient(circle at 21px 9px, #fff 6px, transparent 6.5px); }
-.mp-switch:hover { background: var(--bg-4); }
 .mp-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 12px 20px; display: flex; flex-direction: column; gap: 14px; }
 
 .mp-search { position: relative; display: flex; gap: 6px; }
@@ -607,5 +604,5 @@ label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight:
 
 /* Sohbet: ayırıcı en alta çekilince kapanacağını göster; rozet animasyonu */
 .chat-pane.collapsing { opacity: .35; }
-#chat-badge.pop { animation: badge-pop .35s ease-out; }
+.chat-badge.pop { animation: badge-pop .35s ease-out; }
 @keyframes badge-pop { 40% { transform: scale(1.35); } }

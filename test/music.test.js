@@ -252,16 +252,24 @@ test('Müzik: SoundCloud (sadece ses), "bende kapat" ve önizleme algılama', { 
   // Sadece ses: sayfada YouTube oynatıcısı yok
   assert.equal(await A.locator('#player-box iframe[src*="youtube"]').count(), 0);
 
-  // "Bende kapat": Brand'de oynatıcı tamamen kapanır, internet harcamaz; Ahri'de çalmaya devam eder
-  await B.click('#m-off');
+  // Müzik sesi 0: Brand'de oynatıcı tamamen kapanır, internet harcamaz; Ahri'de çalmaya devam eder
+  await B.evaluate(() => {
+    const r = document.querySelector('#m-vol');
+    r.value = '0';
+    r.dispatchEvent(new Event('input'));
+  });
   await until(B, (s) => s.kind === null, 5000, 'oynatıcının kapanması');
-  assert.match(await B.textContent('#m-off'), /sende kapalı/);
+  assert.equal(await B.textContent('#m-vol-val'), 'Kapalı');
   const before = mediaBytes.Brand;
   await new Promise((r) => setTimeout(r, 6000));
   assert.equal(mediaBytes.Brand, before, 'müzik kapalıyken hiç ses verisi indirilmemeli');
   assert.equal((await state(A)).ytState, PLAYING, 'diğerlerinde çalmaya devam etmeli');
-  // Tekrar açınca kaldığı yerden (herkesle aynı konumda) başlar
-  await B.click('#m-off');
+  // Sesi açınca kaldığı yerden (herkesle aynı konumda) başlar
+  await B.evaluate(() => {
+    const r = document.querySelector('#m-vol');
+    r.value = '30';
+    r.dispatchEvent(new Event('input'));
+  });
   const back = await until(B, (s) => s.kind === 'sc' && s.ytState === PLAYING && s.time > 5, 20000, 'tekrar açılma');
   assert.ok(Math.abs(back.time - back.expected) < 3, 'tekrar açınca herkesle aynı yerde olmalı');
 

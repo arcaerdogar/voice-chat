@@ -84,7 +84,7 @@
     endSent: false,
     durReported: { key: null, d: 0 },
     startTimer: null,
-    musicOff: store.get('musicOff', false), // müzik sadece bu kişide kapalı (internet harcamaz)
+    musicOff: store.get('musicVol', 35) === 0, // müzik sesi 0: oynatıcı tamamen kapanır (internet harcamaz)
     analysisTrack: null,
     meterSrc: null,
     meterNode: null,
@@ -286,12 +286,13 @@
   function bumpUnread(mentioned) {
     if (!chat.hidden) return;
     chat.unread++;
-    const b = $('#chat-badge');
-    b.textContent = chat.unread > 99 ? '99+' : chat.unread;
-    b.hidden = false;
-    b.classList.remove('pop');
-    void b.offsetWidth; // animasyonu yeniden başlat
-    b.classList.add('pop');
+    for (const b of document.querySelectorAll('.chat-badge')) {
+      b.textContent = chat.unread > 99 ? '99+' : chat.unread;
+      b.hidden = false;
+      b.classList.remove('pop');
+      void b.offsetWidth; // animasyonu yeniden başlat
+      b.classList.add('pop');
+    }
     // Bahsetmenin kendi sesi var; art arda mesajlarda ses en fazla 1,5 sn'de bir
     if (!mentioned && !S.deafened && Date.now() - chat.dingAt > 1500) {
       chat.dingAt = Date.now();
@@ -915,10 +916,10 @@
     chat.hidden = hidden;
     store.set('chatHidden', hidden);
     $('.stage').classList.toggle('chat-hidden', hidden);
-    $('#chat-toggle').classList.toggle('active', !hidden);
+    for (const b of document.querySelectorAll('.chat-toggle-btn')) b.classList.toggle('active', !hidden);
     if (!hidden) {
       chat.unread = 0;
-      $('#chat-badge').hidden = true;
+      for (const b of document.querySelectorAll('.chat-badge')) b.hidden = true;
       requestAnimationFrame(scrollChatBottom);
     }
   }
@@ -930,7 +931,7 @@
     chat.unread = 0;
     chat.typers.clear();
     renderTyping();
-    $('#chat-badge').hidden = true;
+    for (const b of document.querySelectorAll('.chat-badge')) b.hidden = true;
     $('#jump-new').hidden = true;
     hideMention();
     closeEmojiPop();
@@ -969,7 +970,7 @@
     $('#jump-new').onclick = scrollChatBottom;
     // Mesaj kutusu büyüyünce / ek eklenince / ayırıcı sürüklenince en altta kal
     if (window.ResizeObserver) new ResizeObserver(() => chat.stuck && scrollChatBottom()).observe($('#chat-log'));
-    $('#chat-toggle').onclick = () => setChatHidden(!chat.hidden);
+    for (const b of document.querySelectorAll('.chat-toggle-btn')) b.onclick = () => setChatHidden(!chat.hidden);
     setChatHidden(chat.hidden);
 
     // Yapıştırma (ekran görüntüsü), sürükle-bırak
@@ -2813,7 +2814,7 @@
     t.title = item.title;
     const meta = document.createElement('div');
     meta.className = 'mp-meta';
-    meta.textContent = item.by ? 'ekleyen: ' + item.by : '';
+    meta.textContent = item.by || '';
     info.append(t, meta);
     const acts = document.createElement('div');
     acts.className = 'mp-acts';
@@ -2844,7 +2845,7 @@
     if (cur) {
       $('#np-title').textContent = cur.title;
       $('#np-title').title = cur.title;
-      $('#np-sub').textContent = cur.by ? 'ekleyen: ' + cur.by : '';
+      $('#np-sub').textContent = cur.by || '';
       $('#m-pause').innerHTML = svgIcon(cur.pausedAt != null ? 'play' : 'pause');
       $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
     }
@@ -3486,7 +3487,7 @@
 
   function applyMusicVolume() {
     $('#m-vol').value = S.musicVol;
-    $('#m-vol-val').textContent = S.musicVol + '%';
+    $('#m-vol-val').textContent = S.musicVol === 0 ? 'Kapalı' : S.musicVol + '%';
     if (!S.player) return;
     try {
       S.player.setVolume(S.musicVol);
@@ -3494,16 +3495,12 @@
     } catch {}
   }
 
-  /** "Müzik bende kapalı" durumunu göster */
+  /** Müzik sesi 0 ise müzik bu kişide kapalıdır (diğerlerinde çalmaya devam eder) */
   function renderMusicOff() {
-    const b = $('#m-off');
-    if (!b) return;
-    b.classList.toggle('on', S.musicOff);
-    b.setAttribute('aria-checked', String(S.musicOff));
-    b.textContent = S.musicOff ? 'Müzik sende kapalı' : 'Bende kapat';
-    b.title = S.musicOff
-      ? 'Müzik sadece sende kapalı; diğerlerinde çalıyor. Tıklayınca kaldığı yerden açılır.'
-      : 'Müziği sadece kendinde kapat: hiç internet harcamaz, diğerlerinde çalmaya devam eder.';
+    $('#m-vol-val').textContent = S.musicOff ? 'Kapalı' : S.musicVol + '%';
+    $('#m-vol').closest('.vol-wrap').title = S.musicOff
+      ? 'Müzik sende kapalı (hiç internet harcamaz); diğerlerinde çalıyor. Sesi açınca kaldığı yerden başlar.'
+      : 'Müzik sesi (sadece senin için). En sola çekersen müzik sende tamamen kapanır.';
     renderArtVisibility();
   }
 
@@ -3837,7 +3834,7 @@
       leaveRoom(true);
       history.replaceState(null, '', '/r/' + encodeURIComponent(S.room) + location.search);
     };
-    $('#copy-link').onclick = async () => {
+    const copyInvite = async () => {
       const link = `${location.origin}/r/${encodeURIComponent(S.room)}`;
       try {
         await navigator.clipboard.writeText(link);
@@ -3846,7 +3843,7 @@
         window.prompt('Linki kopyala:', link);
       }
     };
-    $('#invite-btn').onclick = () => $('#copy-link').click();
+    $('#invite-btn').onclick = copyInvite;
     // Kişi menüsü
     const mm = $('#member-menu');
     const mmVol = mm.querySelector('.vol');
@@ -3882,7 +3879,7 @@
       }
     };
     $('#share-btn').hidden = !canShare;
-    $('#stage-invite').onclick = () => $('#copy-link').click();
+    $('#stage-invite').onclick = copyInvite;
     initChat();
 
     // Müzik paneli
@@ -3922,15 +3919,14 @@
     $('#m-skip').onclick = () => wsSend({ t: 'music-skip' });
     $('#m-prev').onclick = () => wsSend({ t: 'music-prev' });
     $('#m-loop').onclick = () => wsSend({ t: 'music-loop', mode: (LOOP_INFO[S.music.loop] || LOOP_INFO.off).next });
-    $('#m-off').onclick = () => {
-      S.musicOff = !S.musicOff;
-      store.set('musicOff', S.musicOff);
-      syncPlayer();
-    };
     $('#m-vol').oninput = (e) => {
       S.musicVol = Number(e.target.value);
       store.set('musicVol', S.musicVol);
       applyMusicVolume();
+      if ((S.musicVol === 0) !== S.musicOff) {
+        S.musicOff = S.musicVol === 0;
+        syncPlayer(); // kapat ya da kaldığı yerden aç
+      } else renderMusicOff();
     };
     applyMusicVolume();
     renderMusicOff();

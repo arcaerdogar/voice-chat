@@ -88,7 +88,7 @@
     <nav class="sidebar" aria-label="Kanal">
       <header class="side-head">
         <span id="room-name" class="guild-name"></span>
-        <button id="copy-link" class="icon-btn" title="Davet linkini kopyala"><svg class="ic"><use href="#i-link"/></svg></button>
+        <button id="chat-toggle" class="icon-btn chat-toggle-btn" title="Sohbeti gizle / göster"><svg class="ic"><use href="#i-chat"/></svg><span id="chat-badge" class="badge chat-badge" hidden></span></button>
       </header>
       <div class="channels">
         <div class="cat"><span>Kanaldakiler</span><span id="member-count" class="cat-count"></span></div>
@@ -130,15 +130,14 @@
 
     <!-- Orta: sesli kanal -->
     <main class="stage">
+      <!-- Üst bar sadece telefonda (orada sol panel gizli) -->
       <header class="stage-head">
         <svg class="ic"><use href="#i-speaker"/></svg>
         <strong id="stage-room"></strong>
-        <span class="head-div"></span>
-        <span class="muted head-desc">Ses doğrudan kişiler arasında akar</span>
         <span class="spacer"></span>
-        <button id="stage-invite" class="icon-btn mobile-only" title="Davet linkini kopyala"><svg class="ic"><use href="#i-link"/></svg></button>
-        <button id="chat-toggle" class="icon-btn" title="Sohbeti gizle / göster"><svg class="ic"><use href="#i-chat"/></svg><span id="chat-badge" class="badge" hidden></span></button>
-        <button id="music-btn" class="icon-btn mobile-only" title="Müzik"><svg class="ic"><use href="#i-music"/></svg></button>
+        <button id="stage-invite" class="icon-btn" title="Davet linkini kopyala"><svg class="ic"><use href="#i-link"/></svg></button>
+        <button id="chat-toggle-m" class="icon-btn chat-toggle-btn" title="Sohbeti gizle / göster"><svg class="ic"><use href="#i-chat"/></svg><span class="badge chat-badge" hidden></span></button>
+        <button id="music-btn" class="icon-btn" title="Müzik"><svg class="ic"><use href="#i-music"/></svg></button>
       </header>
       <div id="banner" class="banner" hidden></div>
 
@@ -189,7 +188,6 @@
         <span>Müzik</span>
         <span id="music-dot" class="live-dot" hidden></span>
         <span class="spacer"></span>
-        <button id="m-off" class="mp-switch" type="button" role="switch" aria-checked="false">Bende kapat</button>
         <button id="music-close" class="icon-btn mobile-only" title="Kapat"><svg class="ic"><use href="#i-x"/></svg></button>
       </header>
       <div class="mp-body">

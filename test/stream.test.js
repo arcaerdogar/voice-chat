@@ -97,7 +97,7 @@ test('Müzik akışı (yt-dlp): isimle arama, sadece ses, senkron, yetki ve veri
   for (const p of pages) s = await until(p, (s) => s.kind === 'stream' && s.st === 'playing' && s.time > 1, 45000, 'akıştan çalma');
   assert.match(s.title, /Firuze/i);
   assert.ok(srv.musicForTest('akis').current.duration > 200, 'süre baştan bilinmeli');
-  assert.match(await B.textContent('#np-sub'), /ekleyen: Ahri/);
+  assert.match(await B.textContent('#np-sub'), /^Ahri$/);
 
   // Senkron
   await new Promise((r) => setTimeout(r, 2500));
@@ -132,13 +132,21 @@ test('Müzik akışı (yt-dlp): isimle arama, sadece ses, senkron, yetki ve veri
   const rate = ((served() - s0) * 8) / ((Date.now() - t0) / 1000) / 1000;
   t.diagnostic(`Brand toplam ses verisi: ${(served() / 1e6).toFixed(2)} MB; son 10 sn: ${rate.toFixed(0)} kbit/sn`);
   assert.ok(served() > 200000, 'ses gerçekten sunucudan akmalı');
-  await B.click('#m-off');
+  await B.evaluate(() => {
+    const r = document.querySelector('#m-vol');
+    r.value = '0';
+    r.dispatchEvent(new Event('input'));
+  });
   await until(B, (s) => s.kind === null, 5000, 'oynatıcının kapanması');
   await new Promise((r) => setTimeout(r, 1000));
   const s1 = served();
   await new Promise((r) => setTimeout(r, 5000));
   assert.ok(served() - s1 < 2000, 'müzik kapalıyken ses indirilmemeli: ' + (served() - s1) + ' bayt');
-  await B.click('#m-off');
+  await B.evaluate(() => {
+    const r = document.querySelector('#m-vol');
+    r.value = '30';
+    r.dispatchEvent(new Event('input'));
+  });
   await until(B, (s) => s.kind === 'stream' && s.st === 'playing', 20000, 'tekrar açılma');
 
   // Önceki şarkı yok → çalan şarkıyı baştan başlatır (sarma)
