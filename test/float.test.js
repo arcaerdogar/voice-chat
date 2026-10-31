@@ -64,8 +64,9 @@ test('kayan kişi kutuları', { timeout: 120000 }, async (t) => {
     const panel = B.locator('.screen-tile .float-tiles');
     await panel.waitFor({ state: 'visible' });
     // Kendisi hariç iki kişi; Cem'in kamerası kutuda oynuyor
-    assert.equal(await panel.locator('.mini-tile').count(), 2);
-    assert.deepEqual((await panel.locator('.mn-text').allTextContents()).sort(), ['Ahri', 'Cem']);
+    // Kişi kendini de görür (ilk kutu)
+    assert.equal(await panel.locator('.mini-tile').count(), 3);
+    assert.deepEqual(await panel.locator('.mn-text').allTextContents(), ['Bora', 'Ahri', 'Cem']);
     await B.waitForFunction(() => {
       const t = [...document.querySelectorAll('.float-tiles .mini-tile')].find((x) => x.textContent.includes('Cem'));
       const v = t && t.querySelector('video');
@@ -105,8 +106,20 @@ test('kayan kişi kutuları', { timeout: 120000 }, async (t) => {
   await t.test('ekranını paylaşan da kendi önizlemesinde kullanabilir', async () => {
     await A.click('.screen-tile.self .fs-btn');
     await A.waitForSelector('.screen-tile.self .float-tiles .mini-tile', { timeout: 5000 });
-    assert.equal(await A.locator('.float-tiles .mini-tile').count(), 2);
+    assert.equal(await A.locator('.float-tiles .mini-tile').count(), 3);
     await A.evaluate(() => document.exitFullscreen());
+  });
+
+  // Chrome aynı anda tek mini pencereye izin verir: testte herkes aynı tarayıcıda olduğundan sırayla denenir
+  await t.test('ekranını paylaşanda mini pencere paylaşımla açılır, paylaşım bitince kapanır', async (st) => {
+    const has = await A.evaluate(() => 'documentPictureInPicture' in window);
+    if (!has) return st.skip('Document PiP yok');
+    const open = await A.waitForFunction(() => documentPictureInPicture.window && documentPictureInPicture.window.document.querySelectorAll('.mini-tile').length === 3, null, { timeout: 5000 }).catch(() => null);
+    if (!open) return st.skip('başsız Chrome mini pencere açamadı');
+    assert.equal(await A.evaluate(() => documentPictureInPicture.window.document.querySelector('.mn-text').textContent), 'Ahri');
+    await A.click('#share-btn'); // paylaşımı durdur
+    await A.waitForFunction(() => !documentPictureInPicture.window, null, { timeout: 5000 });
+    assert.equal(await A.evaluate(() => window.__rv.screen), null);
   });
 
   await t.test('mini pencere (her zaman üstte)', async (st) => {
@@ -114,13 +127,13 @@ test('kayan kişi kutuları', { timeout: 120000 }, async (t) => {
     if (!supported) return st.skip('bu Chrome sürümünde Document PiP yok');
     assert.equal(await B.isVisible('#pip-btn'), true);
     await B.click('#pip-btn');
-    const ok = await B.waitForFunction(() => documentPictureInPicture.window && documentPictureInPicture.window.document.querySelectorAll('.mini-tile').length === 2, null, { timeout: 5000 }).catch(() => null);
+    const ok = await B.waitForFunction(() => documentPictureInPicture.window && documentPictureInPicture.window.document.querySelectorAll('.mini-tile').length === 3, null, { timeout: 5000 }).catch(() => null);
     if (!ok) return st.skip('başsız (headless) Chrome mini pencere açamadı');
     const info = await B.evaluate(() => {
       const d = documentPictureInPicture.window.document;
       return { names: [...d.querySelectorAll('.mn-text')].map((x) => x.textContent).sort(), bar: d.querySelectorAll('.pip-bar button').length, styled: getComputedStyle(d.body).backgroundColor };
     });
-    assert.deepEqual(info.names, ['Ahri', 'Cem']);
+    assert.deepEqual(info.names, ['Ahri', 'Bora', 'Cem']);
     assert.equal(info.bar, 2);
     assert.notEqual(info.styled, 'rgba(0, 0, 0, 0)', 'stiller mini pencereye kopyalanmalı');
     // Mini penceredeki mikrofon düğmesi asıl sayfayı kontrol eder
@@ -129,6 +142,30 @@ test('kayan kişi kutuları', { timeout: 120000 }, async (t) => {
     // Kapatınca düğme eski haline döner
     await B.evaluate(() => documentPictureInPicture.window.close());
     await B.waitForFunction(() => !document.querySelector('#pip-btn').classList.contains('active'));
+  });
+
+  await t.test('katılınca mini pencere açılır, kişi kendini de görür', async (st) => {
+    const ctx = await browser.newContext({ permissions: ['microphone'] });
+    const D = await ctx.newPage();
+    D.errors = [];
+    D.on('pageerror', (e) => D.errors.push(String(e)));
+    await D.goto('http://localhost:' + PORT + '/r/kayan');
+    if (!(await D.evaluate(() => 'documentPictureInPicture' in window))) return st.skip('Document PiP yok');
+    assert.equal(await D.isVisible('#join-pip-check'), true);
+    await D.check('#join-pip-check');
+    await D.fill('#name-input', 'Diana');
+    await D.click('#join-btn');
+    await D.waitForSelector('#room-view:not([hidden])', { timeout: 20000 });
+    const ok = await D.waitForFunction(() => documentPictureInPicture.window && documentPictureInPicture.window.document.querySelectorAll('.mini-tile').length === 4, null, { timeout: 15000 }).catch(() => null);
+    if (!ok) return st.skip('başsız Chrome mini pencere açamadı');
+    const names = await D.evaluate(() => [...documentPictureInPicture.window.document.querySelectorAll('.mn-text')].map((x) => x.textContent));
+    assert.equal(names[0], 'Diana', 'ilk kutu kişinin kendisi olmalı');
+    // Tercih hatırlanır; ayrılınca pencere kapanır
+    assert.equal(await D.evaluate(() => localStorage.getItem('rv:pipOnJoin')), 'true');
+    await D.click('#leave-btn');
+    await D.waitForFunction(() => !documentPictureInPicture.window);
+    assert.deepEqual(D.errors, []);
+    await ctx.close();
   });
 
   await t.test('konsolda hata yok', () => {

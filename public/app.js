@@ -1222,7 +1222,7 @@
     el.classList.toggle('speaking', on);
     if (el.side) el.side.classList.toggle('speaking', on);
     if (el === S.selfEl) $('.user-panel').classList.toggle('speaking', on);
-    else updateMini(); // kayan kutularda konuşma halkası gecikmesin
+    updateMini(); // kayan kutularda konuşma halkası gecikmesin
   }
 
   // =====================================================================
@@ -1230,7 +1230,8 @@
   // pencereden çıkınca her zaman üstte duran mini pencere (Document PiP).
   // Asıl kutuların (kamera, konuşma, susturma) aynısını küçük olarak gösterir.
   // =====================================================================
-  const miniCards = () => [...S.peers.values()].map((p) => p.el).filter(Boolean);
+  // Kişi kendini de görür (ilk kutu)
+  const miniCards = () => [S.selfEl, ...[...S.peers.values()].map((p) => p.el)].filter(Boolean);
 
   /** Kutuları asıl kişi kartlarıyla eşitle (container başka bir belgede de olabilir: mini pencere) */
   function syncMini(container, cards) {
@@ -1265,6 +1266,7 @@
       const src = card.classList.contains('has-cam') ? card.querySelector('.cam-video').srcObject : null;
       t.classList.toggle('has-cam', !!src);
       const v = t.querySelector('video');
+      v.classList.toggle('mirror', card.querySelector('.cam-video').classList.contains('mirror'));
       if (src) {
         if (v.srcObject !== src) {
           v.srcObject = src;
@@ -1275,7 +1277,7 @@
   }
 
   const ft = { el: null, hidden: store.get('ftHidden', false), row: store.get('ftRow', false), pos: store.get('ftPos', null) };
-  const pip = { win: null, auto: false };
+  const pip = { win: null, auto: false, byShare: false };
   const canPip = 'documentPictureInPicture' in window;
 
   function updateMini() {
@@ -1364,10 +1366,10 @@
   }
 
   // ---- mini pencere (her zaman üstte)
-  async function openPip(auto) {
-    if (!canPip || pip.win || !S.joined) return;
+  async function openPip(auto, onJoin) {
+    if (!canPip || pip.win || (!S.joined && !onJoin)) return;
     try {
-      const n = Math.max(1, S.peers.size);
+      const n = S.peers.size + 1;
       const win = await documentPictureInPicture.requestWindow({ width: 320, height: Math.min(560, 64 + Math.ceil(n / 2) * 104) });
       pip.win = win;
       pip.auto = !!auto;
@@ -1401,11 +1403,13 @@
       win.addEventListener('pagehide', () => {
         pip.win = null;
         pip.auto = false;
+        pip.byShare = false;
         renderPipBtn();
       });
       renderPip();
       renderPipBtn();
     } catch (err) {
+      pip.byShare = false;
       if (!auto) toast('Mini pencere açılamadı: ' + (err.message || err.name), 4000);
     }
   }
@@ -1457,6 +1461,31 @@
       if (document.visibilityState === 'visible' && pip.auto) closePip();
     });
     window.addEventListener('focus', () => pip.auto && closePip());
+    // Başka programa geçip dönene bir kez hatırlat: tarayıcı bu durumda pencereyi kendiliğinden açamaz
+    let awayAt = 0;
+    const away = () => (awayAt = awayAt || Date.now());
+    const back = () => {
+      const t = awayAt;
+      awayAt = 0;
+      if (!t || Date.now() - t < 5000 || pip.win || !S.joined || store.get('pipTipShown', false)) return;
+      store.set('pipTipShown', true);
+      toast('İpucu: oyuna geçerken kişileri görmek için sol üstteki mini pencere düğmesine bas; kapatana kadar üstte kalır.', 7000);
+    };
+    window.addEventListener('blur', away);
+    window.addEventListener('focus', back);
+    const onShare = $('#pip-share-check');
+    onShare.checked = store.get('pipOnShare', true);
+    onShare.onchange = () => store.set('pipOnShare', onShare.checked);
+    const onJoin = $('#pip-join-check');
+    const joinBox = $('#join-pip-check');
+    onJoin.checked = joinBox.checked = store.get('pipOnJoin', false);
+    for (const box of [onJoin, joinBox]) {
+      box.onchange = () => {
+        store.set('pipOnJoin', box.checked);
+        onJoin.checked = joinBox.checked = box.checked;
+      };
+    }
+    $('.join-pip').hidden = !canPip;
     renderPipBtn();
     setInterval(() => {
       if (!S.joined) return;
@@ -2791,8 +2820,10 @@
   async function startShare() {
     if (S.screen) return;
     let stream;
-    try {
-      stream = await navigator.mediaDevices.getDisplayMedia({
+    // Paylaşan kişi genelde oyuna/başka pencereye geçer: aynı tıklamayla mini pencereyi de aç.
+    // (Tarayıcı mini pencereyi ancak bir tıklama anında açtırır; paylaş tıklaması bunu sağlar.)
+    let pipOpening = null;
+    const sharePromise = navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: 30, max: 30 }, width: { max: 1920 }, height: { max: 1080 } },
         // Sekme/sistem sesi de paylaşılır; bu sekmenin kendi sesi (arkadaşların sesi) hariç tutulur ki yankı olmasın
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, suppressLocalAudioPlayback: false, restrictOwnAudio: true },
@@ -2800,7 +2831,15 @@
         selfBrowserSurface: 'exclude',
         surfaceSwitching: 'include',
       });
+    if (canPip && !pip.win && store.get('pipOnShare', true)) {
+      pip.byShare = true;
+      pipOpening = openPip(false);
+    }
+    try {
+      stream = await sharePromise;
     } catch (err) {
+      // Paylaşım iptal edildi: onunla açılan mini pencereyi de kapat
+      if (pipOpening) pipOpening.then(() => pip.byShare && closePip());
       if (err && err.name !== 'NotAllowedError' && err.name !== 'AbortError') toast('Ekran paylaşılamadı: ' + (err.message || err.name), 4000);
       return;
     }
@@ -2821,6 +2860,7 @@
 
   function stopShare() {
     if (!S.screen) return;
+    if (pip.byShare) closePip(); // paylaşımla açılan mini pencere paylaşımla kapanır
     S.screen.stream.getTracks().forEach((t) => t.stop());
     S.screen = null;
     for (const p of S.peers.values()) applyScreenSend(p);
@@ -3928,6 +3968,8 @@
     store.set('lastRoom', room);
     S.name = name;
     S.room = room;
+    // Mini pencere ancak bir tıklamayla açılabilir: katıl tıklaması bunu sağlar
+    if (canPip && store.get('pipOnJoin', false)) openPip(false, true);
     S.micId = $('#join-mic').value || S.micId;
 
     const btn = $('#join-btn');
@@ -3962,6 +4004,7 @@
         btn.disabled = false;
         btn.textContent = 'Kanala katıl';
         S.joined = false;
+        closePip();
         showJoinError(micErrorText(err));
         $('#listen-only-btn').hidden = false;
         return;

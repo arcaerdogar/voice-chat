@@ -79,6 +79,8 @@
       <label for="join-mic">Mikrofon</label>
       <select id="join-mic"><option value="">Varsayılan</option></select>
 
+      <label class="check join-pip" hidden><input type="checkbox" id="join-pip-check"> <span>Mini pencereyi aç: oyuna ya da başka programa geçince de kişiler ekranda kalsın</span></label>
+
       <p id="join-error" class="error" role="alert" hidden></p>
       <button id="join-btn" class="btn primary big" type="submit">Kanala katıl</button>
       <p class="hint center">Mikrofon izni istenecek. Ses doğrudan kişiler arasında akar.</p>
@@ -298,8 +300,10 @@
 
       <div id="pip-settings">
         <div class="section-title">Mini pencere</div>
-        <label class="check"><input type="checkbox" id="auto-pip-check" checked> <span>Sekmeden çıkınca kişileri mini pencerede göster</span></label>
-        <p class="hint">Başka sekmeye geçince kişiler her zaman üstte duran küçük bir pencerede görünür, geri dönünce kapanır. Başka bir programa (ör. oyuna) geçerken görmek için sol üstteki mini pencere düğmesiyle bir kez aç; kapatana kadar üstte kalır. Chrome ve Edge'de çalışır.</p>
+        <label class="check"><input type="checkbox" id="auto-pip-check" checked> <span>Başka sekmeye geçince kişileri mini pencerede göster</span></label>
+        <label class="check"><input type="checkbox" id="pip-share-check" checked> <span>Ekranımı paylaşınca mini pencereyi aç (paylaşım bitince kapanır)</span></label>
+        <label class="check"><input type="checkbox" id="pip-join-check"> <span>Kanala katılınca mini pencereyi aç</span></label>
+        <p class="hint">Başka <b>sekmeye</b> geçince mini pencere kendiliğinden açılır, dönünce kapanır. Başka bir <b>programa</b> (ör. oyuna) geçerken ya da tarayıcıyı küçültürken tarayıcılar pencerenin kendiliğinden açılmasına izin vermez: ekran paylaşımını başlatırken, kanala katılırken ya da sol üstteki düğmeyle açılan mini pencere sen kapatana kadar her şeyin üstünde kalır. <b>Tüm ekranı</b> paylaşıyorsan mini pencere de yayında görünür; sadece oyun penceresini paylaşırsan görünmez. Chrome ve Edge'de çalışır.</p>
       </div>
 
       <div class="dialog-actions">

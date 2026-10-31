@@ -643,3 +643,4 @@ label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight:
 .pip-bar { flex: none; display: flex; justify-content: center; gap: 8px; padding: 6px; background: var(--bg-2); }
 .pip-bar .icon-btn { width: 36px; height: 36px; border-radius: 50%; background: var(--bg-4); color: var(--head); }
 .pip-bar .icon-btn.off { background: var(--red-2); color: #fff; }
+.mini-tile video.mirror { transform: scaleX(-1); }
