@@ -1370,7 +1370,8 @@
     if (!canPip || pip.win || (!S.joined && !onJoin)) return;
     try {
       const n = S.peers.size + 1;
-      const win = await documentPictureInPicture.requestWindow({ width: 320, height: Math.min(560, 64 + Math.ceil(n / 2) * 104) });
+      // Tek sütun: 240 px genişlikte her kutu ~128 px yüksek (16:9) + 6 px aralık
+      const win = await documentPictureInPicture.requestWindow({ width: 240, height: Math.min(720, 12 + n * 134) });
       pip.win = win;
       pip.auto = !!auto;
       // Stiller ve simgeler mini pencereye kopyalanır
