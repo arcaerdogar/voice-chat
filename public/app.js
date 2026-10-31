@@ -1222,6 +1222,247 @@
     el.classList.toggle('speaking', on);
     if (el.side) el.side.classList.toggle('speaking', on);
     if (el === S.selfEl) $('.user-panel').classList.toggle('speaking', on);
+    else updateMini(); // kayan kutularda konuşma halkası gecikmesin
+  }
+
+  // =====================================================================
+  // Kayan kişi kutuları: tam ekran yayında sürüklenebilir panel ve
+  // pencereden çıkınca her zaman üstte duran mini pencere (Document PiP).
+  // Asıl kutuların (kamera, konuşma, susturma) aynısını küçük olarak gösterir.
+  // =====================================================================
+  const miniCards = () => [...S.peers.values()].map((p) => p.el).filter(Boolean);
+
+  /** Kutuları asıl kişi kartlarıyla eşitle (container başka bir belgede de olabilir: mini pencere) */
+  function syncMini(container, cards) {
+    const doc = container.ownerDocument;
+    const map = container._mini || (container._mini = new Map());
+    for (const [card, t] of map) {
+      if (!cards.includes(card)) {
+        t.remove();
+        map.delete(card);
+      }
+    }
+    cards.forEach((card, i) => {
+      let t = map.get(card);
+      if (!t) {
+        t = doc.createElement('div');
+        t.className = 'mini-tile';
+        t.innerHTML = '<video muted playsinline></video><span class="mini-av"></span><span class="mini-name"><span class="mn-text"></span><span class="mn-mute" hidden>' + svgIcon('mic-off') + '</span></span>';
+        map.set(card, t);
+      }
+      if (container.children[i] !== t) container.insertBefore(t, container.children[i] || null);
+      const name = card.querySelector('.name').textContent;
+      const nt = t.querySelector('.mn-text');
+      if (nt.textContent !== name) {
+        nt.textContent = name;
+        t.querySelector('.mini-av').textContent = (name || '?').trim().charAt(0).toUpperCase();
+        t.style.setProperty('--av', card.style.getPropertyValue('--av'));
+        t.style.setProperty('--av-bg', card.style.getPropertyValue('--av-bg'));
+      }
+      t.classList.toggle('speaking', card.classList.contains('speaking'));
+      t.classList.toggle('offline', card.classList.contains('offline'));
+      t.querySelector('.mn-mute').hidden = card.querySelector('.i-mute').hidden && card.querySelector('.i-deaf').hidden;
+      const src = card.classList.contains('has-cam') ? card.querySelector('.cam-video').srcObject : null;
+      t.classList.toggle('has-cam', !!src);
+      const v = t.querySelector('video');
+      if (src) {
+        if (v.srcObject !== src) {
+          v.srcObject = src;
+          v.play().catch(() => {});
+        }
+      } else if (v.srcObject) v.srcObject = null;
+    });
+  }
+
+  const ft = { el: null, hidden: store.get('ftHidden', false), row: store.get('ftRow', false), pos: store.get('ftPos', null) };
+  const pip = { win: null, auto: false };
+  const canPip = 'documentPictureInPicture' in window;
+
+  function updateMini() {
+    if (ft.el && !ft.el.hidden) syncMini(ft.el.querySelector('.ft-list'), miniCards());
+    if (pip.win) renderPip();
+  }
+
+  // ---- tam ekran paneli
+  function ensureFloat() {
+    if (ft.el) return ft.el;
+    const el = document.createElement('div');
+    el.className = 'float-tiles';
+    el.hidden = true;
+    el.title = 'Sürükleyerek taşı';
+    el.innerHTML =
+      '<div class="ft-bar"><button type="button" class="icon-btn ft-rotate" title="Yatay / dikey dizilim">' + svgIcon('rotate') + '</button>' +
+      '<button type="button" class="icon-btn ft-close" title="Kişileri gizle (yayın çubuğundaki düğmeyle tekrar açılır)">' + svgIcon('x') + '</button></div><div class="ft-list"></div>';
+    el.querySelector('.ft-rotate').onclick = () => {
+      ft.row = !ft.row;
+      store.set('ftRow', ft.row);
+      renderFloat();
+    };
+    el.querySelector('.ft-close').onclick = () => setFloatHidden(true);
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.target.closest('button')) return;
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      el.classList.add('dragging');
+      const r = el.getBoundingClientRect();
+      const dx = e.clientX - r.left;
+      const dy = e.clientY - r.top;
+      const move = (ev) => placeFloat(ev.clientX - dx, ev.clientY - dy);
+      const up = () => {
+        el.classList.remove('dragging');
+        el.removeEventListener('pointermove', move);
+        el.removeEventListener('pointerup', up);
+        el.removeEventListener('pointercancel', up);
+        const b = el.getBoundingClientRect();
+        ft.pos = { x: b.left / window.innerWidth, y: b.top / window.innerHeight };
+        store.set('ftPos', ft.pos);
+      };
+      el.addEventListener('pointermove', move);
+      el.addEventListener('pointerup', up);
+      el.addEventListener('pointercancel', up);
+    });
+    ft.el = el;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  /** Paneli ekranın içinde kalacak şekilde konumla */
+  function placeFloat(x, y) {
+    const el = ft.el;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    el.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, x)) + 'px';
+    el.style.top = Math.max(8, Math.min(window.innerHeight - h - 8, y)) + 'px';
+  }
+
+  function setFloatHidden(hidden) {
+    ft.hidden = hidden;
+    store.set('ftHidden', hidden);
+    renderFloat();
+  }
+
+  function renderFloat() {
+    const el = ensureFloat();
+    if (el.classList.contains('dragging')) return;
+    const fs = document.fullscreenElement;
+    const inScreen = !!(fs && fs.classList.contains('screen-tile'));
+    const cards = miniCards();
+    const show = inScreen && !ft.hidden && cards.length > 0;
+    for (const b of document.querySelectorAll('.tiles-btn')) b.classList.toggle('on', show);
+    // Tam ekranda sadece tam ekrandaki öğe görünür: panel onun içine taşınır
+    const parent = inScreen ? fs : document.body;
+    if (el.parentNode !== parent) parent.appendChild(el);
+    const wasHidden = el.hidden;
+    el.hidden = !show;
+    if (!show) return;
+    el.classList.toggle('row', ft.row);
+    syncMini(el.querySelector('.ft-list'), cards);
+    const r = el.getBoundingClientRect();
+    if (ft.pos) placeFloat(ft.pos.x * window.innerWidth, ft.pos.y * window.innerHeight);
+    else if (wasHidden) placeFloat(window.innerWidth - r.width - 16, 16); // varsayılan: sağ üst
+    else placeFloat(r.left, r.top);
+  }
+
+  // ---- mini pencere (her zaman üstte)
+  async function openPip(auto) {
+    if (!canPip || pip.win || !S.joined) return;
+    try {
+      const n = Math.max(1, S.peers.size);
+      const win = await documentPictureInPicture.requestWindow({ width: 320, height: Math.min(560, 64 + Math.ceil(n / 2) * 104) });
+      pip.win = win;
+      pip.auto = !!auto;
+      // Stiller ve simgeler mini pencereye kopyalanır
+      for (const sheet of document.styleSheets) {
+        try {
+          const st = win.document.createElement('style');
+          st.textContent = [...sheet.cssRules].map((r) => r.cssText).join('\n');
+          win.document.head.appendChild(st);
+        } catch {
+          if (sheet.href) {
+            const l = win.document.createElement('link');
+            l.rel = 'stylesheet';
+            l.href = sheet.href;
+            win.document.head.appendChild(l);
+          }
+        }
+      }
+      win.document.title = S.room + ' · Yankı';
+      const sprite = document.querySelector('svg symbol').closest('svg');
+      win.document.body.className = 'pip-body';
+      win.document.body.appendChild(win.document.importNode(sprite, true));
+      const box = win.document.createElement('div');
+      box.className = 'pip';
+      box.innerHTML =
+        '<div class="pip-list"></div><div class="pip-empty" hidden>Kanalda henüz başka kimse yok</div>' +
+        '<div class="pip-bar"><button type="button" class="icon-btn pip-mute"></button><button type="button" class="icon-btn pip-deaf"></button></div>';
+      win.document.body.appendChild(box);
+      box.querySelector('.pip-mute').onclick = () => toggleMute();
+      box.querySelector('.pip-deaf').onclick = () => toggleDeafen();
+      win.addEventListener('pagehide', () => {
+        pip.win = null;
+        pip.auto = false;
+        renderPipBtn();
+      });
+      renderPip();
+      renderPipBtn();
+    } catch (err) {
+      if (!auto) toast('Mini pencere açılamadı: ' + (err.message || err.name), 4000);
+    }
+  }
+
+  function closePip() {
+    if (pip.win) pip.win.close();
+  }
+
+  function renderPip() {
+    const doc = pip.win && pip.win.document;
+    const list = doc && doc.querySelector('.pip-list');
+    if (!list) return;
+    const cards = miniCards();
+    syncMini(list, cards);
+    doc.querySelector('.pip-empty').hidden = cards.length > 0;
+    const off = S.muted || S.deafened || !S.track;
+    const mb = doc.querySelector('.pip-mute');
+    mb.innerHTML = svgIcon(off ? 'mic-off' : 'mic');
+    mb.classList.toggle('off', off);
+    mb.title = off ? 'Mikrofonu aç' : 'Mikrofonu kapat';
+    const db = doc.querySelector('.pip-deaf');
+    db.innerHTML = svgIcon(S.deafened ? 'head-off' : 'head');
+    db.classList.toggle('off', S.deafened);
+    db.title = S.deafened ? 'Sesi aç' : 'Sesi kapat';
+  }
+
+  function renderPipBtn() {
+    const b = $('#pip-btn');
+    b.hidden = !canPip;
+    b.classList.toggle('active', !!pip.win);
+    $('#pip-settings').hidden = !canPip;
+  }
+
+  function initFloat() {
+    document.addEventListener('fullscreenchange', renderFloat);
+    window.addEventListener('resize', () => ft.el && !ft.el.hidden && renderFloat());
+    $('#pip-btn').onclick = () => (pip.win ? closePip() : openPip(false));
+    const auto = $('#auto-pip-check');
+    auto.checked = store.get('autoPip', true);
+    auto.onchange = () => store.set('autoPip', auto.checked);
+    // Chrome/Edge: kamera ya da mikrofon kullanan sayfa başka sekmeye geçilince mini pencereyi kendisi açabilir
+    try {
+      navigator.mediaSession.setActionHandler('enterpictureinpicture', () => {
+        if (S.joined && auto.checked) openPip(true);
+      });
+    } catch {}
+    // Otomatik açılan mini pencere, sayfaya dönünce kapanır
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && pip.auto) closePip();
+    });
+    window.addEventListener('focus', () => pip.auto && closePip());
+    renderPipBtn();
+    setInterval(() => {
+      if (!S.joined) return;
+      if (document.fullscreenElement) renderFloat(); // kişi gelip gidince göster/gizle
+      else updateMini();
+    }, 500);
   }
 
   function updateCount() {
@@ -1255,6 +1496,7 @@
     $('#mute-btn').title = (S.muted || S.deafened || !S.track ? 'Mikrofonu aç' : 'Mikrofonu kapat') + ' (M)';
     $('#deafen-btn').classList.toggle('off', S.deafened);
     $('#deafen-btn').title = (S.deafened ? 'Sesi aç' : 'Sesi kapat') + ' (D)';
+    if (pip.win) renderPip();
   }
 
   function renderPeer(p) {
@@ -2627,9 +2869,11 @@
       '<button class="btn primary watch-btn" type="button">Yayını izle</button></div>' +
       '<div class="screen-bar"><span class="live-badge">CANLI</span><span class="screen-name"></span><span class="spacer"></span>' +
       '<span class="screen-vol" title="Yayın sesi (sadece senin için)">' + svgIcon('speaker') + '<input type="range" min="0" max="100" value="100" aria-label="Yayın sesi"></span>' +
+      '<button class="icon-btn tiles-btn" title="Kişileri göster / gizle" type="button">' + svgIcon('users') + '</button>' +
       '<button class="icon-btn fs-btn" title="Tam ekran" type="button">' + svgIcon('fullscreen') + '</button>' +
       '<button class="btn stop-btn" type="button"></button></div>';
     const video = el.querySelector('video');
+    el.querySelector('.tiles-btn').onclick = () => setFloatHidden(!ft.el || ft.el.hidden ? false : true);
     el.querySelector('.fs-btn').onclick = () => {
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
       else el.requestFullscreen().catch(() => {});
@@ -2701,6 +2945,7 @@
       tiles++;
       if (p.iWatch) watched++;
     }
+    if (document.fullscreenElement) renderFloat();
     const stage = $('.stage');
     stage.classList.toggle('has-screens', tiles > 0);
     stage.classList.toggle('focus', watched > 0);
@@ -3779,6 +4024,8 @@
     $('#screens').innerHTML = '';
     $('.stage').classList.remove('has-screens', 'focus');
     $('.user-panel').classList.remove('speaking');
+    closePip();
+    if (ft.el) ft.el.hidden = true;
     resetChat();
     clearPending();
     hideMusicResults();
@@ -3881,6 +4128,7 @@
     $('#share-btn').hidden = !canShare;
     $('#stage-invite').onclick = copyInvite;
     initChat();
+    initFloat();
 
     // Müzik paneli
     $('#music-btn').onclick = () => $('#music-panel').classList.toggle('open');
