@@ -1401,6 +1401,7 @@
       win.document.body.appendChild(box);
       box.querySelector('.pip-mute').onclick = () => toggleMute();
       box.querySelector('.pip-deaf').onclick = () => toggleDeafen();
+      win.addEventListener('resize', () => renderPip());
       win.addEventListener('pagehide', () => {
         pip.win = null;
         pip.auto = false;
@@ -1419,12 +1420,29 @@
     if (pip.win) pip.win.close();
   }
 
+  /** 16:9 kutuları mini pencereye sığacak en büyük boyutta diz (ana sahnedeki düzenle aynı hesap) */
+  function fitPip(list, n) {
+    if (!n) return;
+    const pad = 6;
+    const gap = 6;
+    const W = pip.win.innerWidth - pad * 2;
+    const H = pip.win.innerHeight - pad * 2;
+    let best = 0;
+    for (let cols = 1; cols <= n; cols++) {
+      const rows = Math.ceil(n / cols);
+      const w = Math.min((W - gap * (cols - 1)) / cols, ((H - gap * (rows - 1)) / rows) * (16 / 9));
+      if (w > best) best = w;
+    }
+    list.style.setProperty('--mini-w', Math.max(60, Math.floor(best)) + 'px');
+  }
+
   function renderPip() {
     const doc = pip.win && pip.win.document;
     const list = doc && doc.querySelector('.pip-list');
     if (!list) return;
     const cards = miniCards();
     syncMini(list, cards);
+    fitPip(list, cards.length);
     doc.querySelector('.pip-empty').hidden = cards.length > 0;
     const off = S.muted || S.deafened || !S.track;
     const mb = doc.querySelector('.pip-mute');
