@@ -298,6 +298,12 @@
       <label class="check"><input type="checkbox" id="ec-check" checked> Yankı engelleme</label>
       <label class="check"><input type="checkbox" id="agc-check" checked> Otomatik ses seviyesi</label>
 
+      <div class="section-title">Müzik</div>
+      <label class="check"><input type="checkbox" id="duck-check"> <span>Biri konuşunca müziği kıs</span></label>
+      <label for="duck-range">Konuşma sırasında müzik sesi <span id="duck-val" class="num"></span></label>
+      <input type="range" id="duck-range" min="0" max="90" step="5" value="30">
+      <p class="hint">Kendi müzik sesinin yüzdesi olarak (0 = tamamen sustur). Konuşma bitince müzik yavaşça eski sesine döner. Sadece sende geçerli.</p>
+
       <div id="pip-settings">
         <div class="section-title">Mini pencere</div>
         <label class="check"><input type="checkbox" id="auto-pip-check" checked> <span>Başka sekmeye geçince kişileri mini pencerede göster</span></label>

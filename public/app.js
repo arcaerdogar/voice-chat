@@ -77,6 +77,10 @@
     clockOffset: 0, // sunucu saati - yerel saat (ms)
     music: { queue: [], current: null, history: [], loop: 'off', search: false },
     musicVol: store.get('musicVol', 35),
+    duck: store.get('duck', false), // biri konuşunca müziği kıs
+    duckPct: store.get('duckPct', 30), // konuşurken müzik sesi (müzik sesinin yüzdesi)
+    duckFactor: 1, // şu anki kısma oranı (1 = kısılmamış)
+    duckSpeechAt: 0,
     player: null, // çalan oynatıcı (YouTube ya da SoundCloud)
     playerCreating: null,
     playerCreatingKind: null,
@@ -2709,6 +2713,7 @@
       p.levelDb = rms > 0 ? 20 * Math.log10(rms) : -100;
       setSpeaking(p.el, p.levelDb > SPEAK_DB && !p.localMuted && p.pc && p.pc.connectionState === 'connected');
     }
+    updateDuck();
   }
 
   async function collectStats() {
@@ -3789,12 +3794,32 @@
     }
   }
 
+  /** Oynatıcıya giden ses: kişinin müzik sesi × konuşma sırasında kısma oranı */
+  const musicOutVol = () => Math.round(S.musicVol * S.duckFactor);
+
+  /**
+   * Biri konuşunca müziği kıs: hızlı kısılır (~0,3 sn), konuşma bitince 0,8 sn bekler,
+   * sonra yavaşça (~1 sn) eski sesine döner; böylece cümle aralarında müzik inip çıkmaz.
+   */
+  function updateDuck() {
+    const now = Date.now();
+    if (S.duck && [...S.peers.values()].some((p) => p.el && p.el.classList.contains('speaking'))) S.duckSpeechAt = now;
+    const target = S.duck && now - S.duckSpeechAt < 800 ? S.duckPct / 100 : 1;
+    if (S.duckFactor === target) return;
+    S.duckFactor = target < S.duckFactor ? Math.max(target, S.duckFactor - 0.35) : Math.min(target, S.duckFactor + 0.1);
+    if (S.player && !S.musicOff) {
+      try {
+        S.player.setVolume(musicOutVol());
+      } catch {}
+    }
+  }
+
   function applyMusicVolume() {
     $('#m-vol').value = S.musicVol;
     $('#m-vol-val').textContent = S.musicVol === 0 ? 'Kapalı' : S.musicVol + '%';
     if (!S.player) return;
     try {
-      S.player.setVolume(S.musicVol);
+      S.player.setVolume(musicOutVol());
       S.player.setMuted(S.deafened || S.musicVol === 0);
     } catch {}
   }
@@ -4306,6 +4331,25 @@
         if (S.joined && S.track) switchMic();
       };
     }
+
+    // Biri konuşunca müziği kıs
+    const renderDuck = () => {
+      $('#duck-check').checked = S.duck;
+      $('#duck-range').value = S.duckPct;
+      $('#duck-range').disabled = !S.duck;
+      $('#duck-val').textContent = S.duckPct === 0 ? 'sessiz' : '%' + S.duckPct;
+    };
+    $('#duck-check').onchange = (e) => {
+      S.duck = e.target.checked;
+      store.set('duck', S.duck);
+      renderDuck();
+    };
+    $('#duck-range').oninput = (e) => {
+      S.duckPct = Number(e.target.value);
+      store.set('duckPct', S.duckPct);
+      renderDuck();
+    };
+    renderDuck();
 
     window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp, true);

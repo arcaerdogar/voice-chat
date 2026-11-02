@@ -18,7 +18,8 @@
     "test:camera": "node --test test/camera.test.js",
     "test:admin": "node --test test/admin.test.js",
     "test:chat": "node --test test/chat.test.js",
-    "test:float": "node --test test/float.test.js"
+    "test:float": "node --test test/float.test.js",
+    "test:duck": "node --test test/duck.test.js"
   },
   "engines": {
     "node": ">=18"

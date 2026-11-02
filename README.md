@@ -29,7 +29,7 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
   görseller sohbette (tıklayınca büyür), video/ses oynatılır, diğer dosyalar indirme kartı olarak. Dosya başına 25 MB;
   dosyalar tahmin edilemeyen adreslerde tutulur, 24 saat sonra ya da kanal boşalınca silinir
 - **Müzik paneli** (sağda): şarkı adıyla arayıp sonuç listesinden seçme, kapak görseli, herkes için sarılabilen ilerleme çubuğu,
-  karıştır/önceki/oynat/sonraki/tekrar, sıradakiler (kapak + süre, "sıradaki yap", çıkar), son çalınanlar
+  karıştır/önceki/oynat/sonraki/tekrar, isteğe bağlı "biri konuşunca müziği kıs" (ayarlardan, seviye kişiye özel), sıradakiler (kapak + süre, "sıradaki yap", çıkar), son çalınanlar
 - **Yönetici paneli** (`/admin`, linksiz; .env'deki kullanıcı/şifreyle): anlık kanallar ve kişiler (IP, ülke, cihaz, bağlantı
   kalitesi), atma, IP yasaklama, susturma, kanal kilitleme/kapatma, müzik kontrolü, duyuru, olay günlüğü
 - **Kayan kişi kutuları**: yayın tam ekrandayken diğer kişiler sürüklenebilir küçük kutularda görünür (konuşma halkası, kamera, susturma; yatay/dikey, kapatılabilir). Sekmeden çıkınca ya da sol üstteki düğmeyle açılan **mini pencere** her zaman üstte durur; başka programa (oyuna) geçince de görünür, mikrofon/ses düğmeleri vardır (Chrome/Edge)
@@ -161,6 +161,7 @@ npm run test:turn     # gerçek coturn (Docker) ile röle testi
 npm run test:noise    # yapay zekâ gürültü engelleme ölçümü
 npm run test:music    # gerçek YouTube/SoundCloud oynatıcısıyla müzik testi (erişilemezse atlanır)
 npm run test:admin    # yönetici paneli testleri (güvenlik + işlemler + arayüz)
+npm run test:duck     # biri konuşunca müziği kısma
 npm run test:float    # tam ekranda kayan kişi kutuları ve mini pencere
 npm run test:chat     # sohbet: biçimlendirme, bahsetme, tepkiler, dosya/görsel paylaşımı, geçmiş
 npm run test:camera   # kamera testi (üç Chrome, sahte kamera)
