@@ -91,11 +91,33 @@ test('Müzik akışı (yt-dlp): isimle arama, sadece ses, senkron, yetki ve veri
   await A.waitForSelector('#music-results button.mp-result', { timeout: 30000 });
   assert.ok((await A.locator('#music-results button.mp-result').count()) >= 3, 'birkaç sonuç listelenmeli');
   assert.match(await A.textContent('#music-results'), /firuze/i);
+  // Çalmaya başladığı ilk andaki konumu kaydet: herkes hazır olunca baştan başlamalı (ilk saniyeler kaçmamalı)
+  for (const p of pages) {
+    await p.evaluate(() => {
+      window.__firstPlay = null;
+      window.__sawLoading = false;
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const S = window.__rv;
+        if (S.music.current && S.music.current.loading) window.__sawLoading = true;
+        if (S.player && S.player.state() === 'playing' && S.player.time() > 0) {
+          window.__firstPlay = { pos: S.player.time(), afterMs: Date.now() - t0 };
+          clearInterval(iv);
+        }
+      }, 50);
+    });
+  }
   await A.click('#music-results button.mp-result >> nth=0');
   assert.equal(await A.isHidden('#music-results'), true);
   let s;
   for (const p of pages) s = await until(p, (s) => s.kind === 'stream' && s.st === 'playing' && s.time > 1, 45000, 'akıştan çalma');
   assert.match(s.title, /Firuze/i);
+  for (const p of pages) {
+    const f = await p.evaluate(() => ({ first: window.__firstPlay, loading: window.__sawLoading }));
+    t.diagnostic('ilk çalma: ' + JSON.stringify(f));
+    assert.ok(f.loading, 'şarkı önce hazırlanıyor durumunda beklemeli');
+    assert.ok(f.first && f.first.pos < 1.5, 'şarkı baştan başlamalı, ilk saniyeler kaçmamalı: ' + JSON.stringify(f.first));
+  }
   assert.ok(srv.musicForTest('akis').current.duration > 200, 'süre baştan bilinmeli');
   assert.match(await B.textContent('#np-sub'), /^Ahri$/);
 

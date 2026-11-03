@@ -1955,7 +1955,7 @@
     ws.onopen = () => {
       clearTimeout(openTimeout);
       if (S.ws !== ws) return;
-      wsSend({ t: 'join', room: S.room, id: S.id, name: S.name, muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen, camera: !!S.cam });
+      wsSend({ t: 'join', room: S.room, id: S.id, name: S.name, muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen, camera: !!S.cam, musicReady: true });
       startPing();
     };
     ws.onmessage = (e) => {
@@ -3154,9 +3154,10 @@
     if (cur) {
       $('#np-title').textContent = cur.title;
       $('#np-title').title = cur.title;
-      $('#np-sub').textContent = cur.by || '';
-      $('#m-pause').innerHTML = svgIcon(cur.pausedAt != null ? 'play' : 'pause');
-      $('#m-pause').title = cur.pausedAt != null ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
+      $('#np-sub').textContent = cur.loading ? 'Hazırlanıyor…' : cur.by || '';
+      const paused = cur.pausedAt != null && !cur.loading;
+      $('#m-pause').innerHTML = svgIcon(paused ? 'play' : 'pause');
+      $('#m-pause').title = paused ? 'Devam ettir (herkes için)' : 'Duraklat (herkes için)';
     }
     const pill = $('#np-pill');
     pill.hidden = !cur;
@@ -3373,6 +3374,7 @@
       if (el.getAttribute('src')) ev.onError('stream-error');
     });
     el.addEventListener('loadedmetadata', () => ev.onDuration && ev.onDuration());
+    el.addEventListener('canplaythrough', () => ev.onReady && ev.onReady());
     const load = (c, p, pl) => {
       id = c.id;
       state = pl ? 'buffering' : 'cued';
@@ -3408,6 +3410,7 @@
       volume: () => Math.round(el.volume * 100),
       muted: () => el.muted,
       setSink: (sink) => el.setSinkId && el.setSinkId(sink || '').catch(() => {}),
+      ready: () => el.readyState >= 4, // HAVE_ENOUGH_DATA: takılmadan çalabilir
       destroy: () => {
         el.pause();
         el.removeAttribute('src');
@@ -3632,6 +3635,7 @@
       onState: (s) => onPlayerState(s),
       onError: (code) => onPlayerError(code),
       onDuration: () => reportDuration(),
+      onReady: () => reportReady(),
     };
     S.playerCreatingKind = kind;
     S.playerCreating = ({ sc: createSoundCloudPlayer, stream: createStreamPlayer, yt: createYouTubePlayer }[kind])(cur, pos, play, ev)
@@ -3646,6 +3650,23 @@
       })
       .finally(() => (S.playerCreating = null));
     return S.playerCreating;
+  }
+
+  /**
+   * Şarkı "hazırlanıyor" iken oynatıcı çalmaya hazır olunca sunucuya bildir; herkes hazır olunca
+   * şarkı herkeste baştan başlar (yükleme süresinde ilk saniyeler kaçmaz). Ses akışı yeterince
+   * yüklenince hazır sayılır; YouTube/SoundCloud oynatıcıları şarkıyı yükleyince.
+   * force: oynatıcı yok (müzik bu kişide kapalı ya da açılamadı) — bu kişi beklenmesin.
+   */
+  function reportReady(force) {
+    const cur = S.music.current;
+    if (!cur || !cur.loading || S.readySent === cur.key) return;
+    if (!force) {
+      if (!S.player || S.playKey !== cur.key) return;
+      if (S.player.ready && !S.player.ready()) return;
+    }
+    S.readySent = cur.key;
+    wsSend({ t: 'music-ready', key: cur.key });
   }
 
   function destroyPlayer() {
@@ -3663,6 +3684,7 @@
     if (!cur || S.musicOff) {
       // Müzik yok ya da bu kişi müziği kendinde kapattı: oynatıcıyı tamamen kapat (hiç internet harcamaz)
       if (S.player) destroyPlayer();
+      reportReady(true);
       return;
     }
     let p;
@@ -3675,6 +3697,7 @@
           ? 'Müzik akışı başlatılamadı.'
           : (sourceOf(cur) === 'sc' ? 'SoundCloud' : 'YouTube') + ' oynatıcısı yüklenemedi. Reklam engelleyici engelliyor olabilir.';
       $('#music-note').hidden = false;
+      reportReady(true);
       return;
     }
     $('#music-note').hidden = true;
@@ -3687,8 +3710,10 @@
       const play = cur.pausedAt == null && pos >= 0;
       p.load(cur, Math.max(0, pos), play);
       if (pos < 0 && cur.pausedAt == null) S.startTimer = setTimeout(syncPlayer, -pos * 1000);
+      reportReady();
       return;
     }
+    reportReady();
 
     const st = p.state();
     if (cur.pausedAt != null) {
@@ -4249,7 +4274,7 @@
     setInterval(() => S.joined && updateProgress(), 500);
     $('#m-pause').onclick = () => {
       const cur = S.music.current;
-      if (cur) wsSend({ t: cur.pausedAt != null ? 'music-resume' : 'music-pause' });
+      if (cur) wsSend({ t: cur.pausedAt != null && !cur.loading ? 'music-resume' : 'music-pause' });
     };
     $('#m-skip').onclick = () => wsSend({ t: 'music-skip' });
     $('#m-prev').onclick = () => wsSend({ t: 'music-prev' });

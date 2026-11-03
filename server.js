@@ -102,7 +102,12 @@ function buildIceServers(env) {
 // ---------- Müzik (ortak YouTube çalma listesi) ----------
 
 const MUSIC_QUEUE_MAX = 50;
-const MUSIC_START_DELAY_MS = 1500; // herkes videoyu yükleyebilsin diye şarkı biraz ileride başlar
+const MUSIC_START_DELAY_MS = 1500; // hazır bildirimi göndermeyen (eski) istemciler için: şarkı biraz ileride başlar
+// Şarkı herkes "hazırım" deyince başlar (ilk saniyeler kaçmasın). Yavaş biri herkesi bekletmesin:
+// ilk kişi hazır olduktan en fazla 3 sn sonra, her durumda en fazla 10 sn sonra başlar.
+const MUSIC_READY_AFTER_FIRST_MS = 3000;
+const MUSIC_READY_MAX_MS = 10000;
+const MUSIC_READY_LEAD_MS = 300; // başlama komutu herkese ulaşsın diye küçük pay
 // Şarkı, bilinen süresi + bu pay dolunca sunucu tarafından geçilir. Pay, reklam izleyen
 // birinin gerçek süreyi bildirmesine ve yavaş yükleyenlere zaman tanır.
 const MUSIC_END_GRACE_MS = 8000;
@@ -196,6 +201,8 @@ function createServer(options = {}) {
   /** Akış izni: kişiye özel anahtar → üye */
   const streamTokens = new Map();
   const musicStartDelay = options.musicStartDelayMs ?? MUSIC_START_DELAY_MS;
+  const musicReadyAfterFirst = options.musicReadyAfterFirstMs ?? MUSIC_READY_AFTER_FIRST_MS;
+  const musicReadyMax = options.musicReadyMaxMs ?? MUSIC_READY_MAX_MS;
 
   // Sohbet geçmişi (oda başına son 100 mesaj, bellekte) ve paylaşılan dosyalar
   const roomChat = new Map();
@@ -263,11 +270,36 @@ function createServer(options = {}) {
     return { key: cur.itemKey, source: cur.source || 'yt', id: cur.id, title: cur.title, author: cur.author, by: cur.by, duration: cur.duration || null, thumb: cur.thumb || null };
   }
 
+  /** Hazır bildirimi gönderebilen (yeni sürüm) çevrimiçi üyeler */
+  function readyCapable(roomName) {
+    const room = rooms.get(roomName);
+    return room ? [...room.values()].filter((x) => x.online && x.musicReady) : [];
+  }
+
   function startItem(roomName, item) {
     const m = musicOf(roomName);
+    clearTimeout(m.readyTimer);
+    clearTimeout(m.firstReadyTimer);
+    m.readyTimer = m.firstReadyTimer = null;
+    m.ready = new Set();
+    // Hazır bildirebilen biri varsa şarkı "hazırlanıyor" durumunda başta bekler (pausedAt: 0, loading),
+    // herkes yükleyince birlikte başlar. Yoksa eski davranış: biraz ileride başla.
+    const wait = item && musicReadyMax > 0 && readyCapable(roomName).length > 0;
     m.current = item
-      ? { ...item, itemKey: item.key, key: newKey(), startedAt: Date.now() + musicStartDelay, pausedAt: null, duration: item.duration || null }
+      ? {
+          ...item,
+          itemKey: item.key,
+          key: newKey(),
+          startedAt: wait ? null : Date.now() + musicStartDelay,
+          pausedAt: wait ? 0 : null,
+          loading: wait,
+          duration: item.duration || null,
+        }
       : null;
+    if (wait) {
+      const key = m.current.key;
+      m.readyTimer = setTimeout(() => beginPlayback(roomName, key), musicReadyMax);
+    }
     m.failedBy = new Set();
     m.altPending = false;
     scheduleMusicEnd(roomName);
@@ -276,6 +308,37 @@ function createServer(options = {}) {
       for (const it of [m.current, m.queue[0]]) {
         if (it && it.source !== 'sc') Promise.resolve(ytdlp.audioUrl(it.id)).catch(() => {});
       }
+    }
+  }
+
+  /** Hazırlanan şarkıyı herkeste aynı anda başlat (kaldığı konumdan; normalde baştan) */
+  function beginPlayback(roomName, key) {
+    const m = music.get(roomName);
+    const cur = m && m.current;
+    if (!cur || cur.key !== key || !cur.loading) return;
+    clearTimeout(m.readyTimer);
+    m.readyTimer = null;
+    cur.loading = false;
+    cur.startedAt = Date.now() + MUSIC_READY_LEAD_MS - (cur.pausedAt || 0) * 1000;
+    cur.pausedAt = null;
+    scheduleMusicEnd(roomName);
+    broadcastMusic(roomName, null);
+  }
+
+  /** Bir üye hazır olunca (ya da odadan çıkınca) başlama koşulunu yeniden değerlendir */
+  function checkReady(roomName) {
+    const m = music.get(roomName);
+    const cur = m && m.current;
+    if (!cur || !cur.loading) return;
+    const waiting = readyCapable(roomName).filter((x) => !m.ready.has(x.id));
+    if (!waiting.length) return beginPlayback(roomName, cur.key);
+    // İlk kişi hazır: diğerlerini en fazla birkaç saniye daha bekle
+    if (m.ready.size && !m.firstReadyTimer) {
+      const key = cur.key;
+      m.firstReadyTimer = setTimeout(() => {
+        m.firstReadyTimer = null;
+        beginPlayback(roomName, key);
+      }, musicReadyAfterFirst);
     }
   }
 
@@ -607,10 +670,15 @@ function createServer(options = {}) {
       roomChat.delete(roomName);
       uploads.removeRoom(roomName);
       const m = music.get(roomName);
-      if (m) clearTimeout(m.endTimer);
+      if (m) {
+        clearTimeout(m.endTimer);
+        clearTimeout(m.readyTimer);
+        clearTimeout(m.firstReadyTimer);
+      }
       music.delete(roomName);
     }
     broadcast(roomName, { t: 'peer-left', id });
+    checkReady(roomName); // beklenen kişi ayrıldıysa şarkı başlasın
     log(`leave room=${roomName} id=${id} size=${room.size}`);
   }
 
@@ -716,6 +784,7 @@ function createServer(options = {}) {
             existing.deafened = !!msg.deafened;
             existing.sharing = !!msg.sharing;
             existing.camera = !!msg.camera;
+            existing.musicReady = !!msg.musicReady;
             existing.ip = ws.ip;
             existing.country = ws.country;
             existing.ua = ws.ua;
@@ -734,6 +803,7 @@ function createServer(options = {}) {
               deafened: !!msg.deafened,
               sharing: !!msg.sharing,
               camera: !!msg.camera,
+              musicReady: !!msg.musicReady, // şarkı yüklenince "hazırım" bildirir
               online: true,
               ws,
               graceTimer: null,
@@ -984,6 +1054,17 @@ function createServer(options = {}) {
           return;
         }
 
+        case 'music-ready': {
+          // Bu kişinin oynatıcısı şarkıyı çalmaya hazır (ya da müziği kendinde kapattı)
+          if (!member || member.ws !== ws) return;
+          const m = music.get(member.room);
+          const cur = m && m.current;
+          if (!cur || !cur.loading || msg.key !== cur.key) return;
+          m.ready.add(member.id);
+          checkReady(member.room);
+          return;
+        }
+
         case 'music-duration': {
           // İstemciler oynatıcının bildirdiği süreyi gönderir. Reklam sırasında reklamın
           // süresi gelebilir; bu yüzden en büyük değer geçerlidir.
@@ -1026,11 +1107,21 @@ function createServer(options = {}) {
             scheduleMusicEnd(member.room);
             event = `⏹️ ${member.name} müziği durdurdu`;
           } else if (msg.t === 'music-pause') {
+            if (cur && cur.loading) {
+              // Hazırlanırken duraklatıldı: hazır olunca kendiliğinden başlamasın
+              cur.loading = false;
+              clearTimeout(m.readyTimer);
+              clearTimeout(m.firstReadyTimer);
+              m.readyTimer = m.firstReadyTimer = null;
+              broadcastMusic(member.room, `⏸️ ${member.name} duraklattı`);
+              return;
+            }
             if (!cur || cur.pausedAt != null) return;
             cur.pausedAt = Math.max(0, (now - cur.startedAt) / 1000);
             scheduleMusicEnd(member.room);
             event = `⏸️ ${member.name} duraklattı`;
           } else if (msg.t === 'music-resume') {
+            if (cur && cur.loading) return beginPlayback(member.room, cur.key); // beklemeden başlat
             if (!cur || cur.pausedAt == null) return;
             cur.startedAt = now - cur.pausedAt * 1000;
             cur.pausedAt = null;
@@ -1055,6 +1146,11 @@ function createServer(options = {}) {
             } else {
               // Oynatılamama: bir kişideki sorun herkesin müziğini kesmesin.
               // Ancak odadakilerin yarısından fazlası oynatamıyorsa geçilir.
+              // Hazırlanırken oynatamayan kişi beklenmez
+              if (cur.loading) {
+                m.ready.add(member.id);
+                checkReady(member.room);
+              }
               if (!m.failedBy) m.failedBy = new Set();
               m.failedBy.add(member.id);
               const code = typeof msg.code === 'number' || ['sc-snip', 'sc-block', 'sc-error', 'stream-error'].includes(msg.code) ? msg.code : null;
