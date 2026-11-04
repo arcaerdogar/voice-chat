@@ -32,6 +32,7 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
   karıştır/önceki/oynat/sonraki/tekrar, isteğe bağlı "biri konuşunca müziği kıs" (ayarlardan, seviye kişiye özel), sıradakiler (kapak + süre, "sıradaki yap", çıkar), son çalınanlar
 - **Yönetici paneli** (`/admin`, linksiz; .env'deki kullanıcı/şifreyle): anlık kanallar ve kişiler (IP, ülke, cihaz, bağlantı
   kalitesi), atma, IP yasaklama, susturma, kanal kilitleme/kapatma, müzik kontrolü, duyuru, olay günlüğü
+- **Odak** (Discord gibi): bir kutuyu (kamera, kişi ya da yayın) büyütme düğmesiyle ya da tıklayarak odağa al; diğerleri altta küçük şeritte durur, şeritten seçince odak değişir, Esc ile çıkılır
 - **Kayan kişi kutuları**: yayın tam ekrandayken diğer kişiler sürüklenebilir küçük kutularda görünür (konuşma halkası, kamera, susturma; yatay/dikey, kapatılabilir). Sekmeden çıkınca ya da sol üstteki düğmeyle açılan **mini pencere** her zaman üstte durur; başka programa (oyuna) geçince de görünür, mikrofon/ses düğmeleri vardır (Chrome/Edge)
 - **Kamera**: kişinin kutusunda avatar yerine görüntüsü (640×360, 24 fps, kişi başı en fazla ~500 kbit/sn). Telefonda da çalışır; ayarlardan kamera seçilir.
 - **Ekran paylaşımı** (Discord'daki "Yayın" gibi): ekran, pencere ya da sekme, sesiyle birlikte (Chrome/Edge). İzlemek isteğe bağlıdır;
@@ -161,6 +162,7 @@ npm run test:turn     # gerçek coturn (Docker) ile röle testi
 npm run test:noise    # yapay zekâ gürültü engelleme ölçümü
 npm run test:music    # gerçek YouTube/SoundCloud oynatıcısıyla müzik testi (erişilemezse atlanır)
 npm run test:admin    # yönetici paneli testleri (güvenlik + işlemler + arayüz)
+npm run test:spot     # odak: bir kutu büyük, diğerleri şeritte
 npm run test:duck     # biri konuşunca müziği kısma
 npm run test:float    # tam ekranda kayan kişi kutuları ve mini pencere
 npm run test:chat     # sohbet: biçimlendirme, bahsetme, tepkiler, dosya/görsel paylaşımı, geçmiş

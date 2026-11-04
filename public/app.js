@@ -1179,11 +1179,96 @@
     el.classList.toggle('muted-local', p.localMuted);
   }
 
+  // ---- Odak: bir kutu (kişi/kamera ya da yayın) büyük, diğerleri altta şeritte (Discord gibi) ----
+  // Kutu, yerinde bir yer tutucu bırakılarak odak alanına taşınır ve geri konur. Taşıma tek adımda
+  // yapıldığı için içindeki video durmaz.
+  let spotMarker = null;
+
+  function setSpot(el) {
+    if (el && S.spot === el) el = null;
+    const old = S.spot;
+    if (old) {
+      old.style.removeProperty('width');
+      if (spotMarker && spotMarker.parentNode) spotMarker.replaceWith(old);
+      else if (old.classList.contains('participant')) $('#participants').appendChild(old);
+    }
+    if (spotMarker) spotMarker.remove();
+    S.spot = null;
+    spotMarker = null;
+    if (el && el.isConnected) {
+      spotMarker = document.createComment('odak');
+      el.before(spotMarker);
+      $('#spot').appendChild(el);
+      S.spot = el;
+    }
+    renderScreens(); // düzeni (odak / yayın odağı / ızgara) yeniden kurar, renderSpot'u çağırır
+  }
+
+  function renderSpot() {
+    // Odaktaki kutu kaldırıldıysa (kişi ayrıldı, yayın bitti) ızgaraya dön
+    if (S.spot && !S.spot.isConnected) {
+      if (spotMarker) spotMarker.remove();
+      S.spot = null;
+      spotMarker = null;
+    }
+    const on = !!S.spot;
+    const stage = $('.stage');
+    stage.classList.toggle('spotlit', on);
+    if (on) stage.classList.remove('focus');
+    $('#spot').hidden = !on;
+    for (const b of document.querySelectorAll('.spot-btn')) {
+      const me = b.closest('.participant, .screen-tile') === S.spot;
+      b.innerHTML = svgIcon(me ? 'unfocus' : 'focus');
+      b.title = me ? 'Odaktan çık (Esc)' : 'Odakla';
+    }
+    fitSpot();
+  }
+
+  /** Odaktaki kişi kutusu 16:9 kalarak alana sığacak en büyük boyutta */
+  function fitSpot() {
+    const el = S.spot;
+    if (!el || !el.classList.contains('participant')) return;
+    const box = $('#spot');
+    const cs = getComputedStyle(box);
+    const W = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const H = box.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+    if (W > 0 && H > 0) el.style.width = Math.floor(Math.min(W, (H * 16) / 9)) + 'px';
+  }
+
+  function initSpot() {
+    // Kutuya tıklamak odaklar (şeritte tıklanan odağa geçer); düğmeler ve kaydırıcılar hariç.
+    // Telefonda kutuya dokunmak kişi menüsünü açtığı için orada sadece odak düğmesi kullanılır.
+    $('#call').addEventListener('click', (e) => {
+      const tile = e.target.closest('.participant, .screen-tile');
+      // Tam ekranda ya da kayan kişi panelinde (sürükle-bırak da tıklama sayılır) odak değişmez
+      if (!tile || window.innerWidth <= 760 || document.fullscreenElement || e.target.closest('.float-tiles')) return;
+      if (e.target.closest('button, input, a, select') || tile === S.spot) return;
+      setSpot(tile);
+    });
+    // Telefonda kutunun kendi tıklaması (kişi menüsü) yayılmayı durdurur; odak düğmesi önce yakalanır
+    $('#call').addEventListener(
+      'click',
+      (e) => {
+        const b = e.target.closest('.spot-btn');
+        if (!b) return;
+        e.stopPropagation();
+        setSpot(b.closest('.participant, .screen-tile'));
+      },
+      true
+    );
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !S.spot || isTyping(e) || document.fullscreenElement) return;
+      if (!$('#lightbox').hidden || $('#settings-dialog').open || !$('#member-menu').hidden) return;
+      setSpot(null);
+    });
+    if (window.ResizeObserver) new ResizeObserver(() => fitSpot()).observe($('#spot'));
+  }
+
   // ---- Kutu düzeni: 16:9 kutular sahneyi dolduracak en büyük boyutta, ortalı ----
   function layoutTiles() {
     const box = $('#participants');
     if (!box || $('#room-view').hidden) return;
-    if ($('.stage').classList.contains('focus')) return box.style.removeProperty('--tile-w');
+    if ($('.stage').classList.contains('focus') || S.spot) return box.style.removeProperty('--tile-w');
     const n = box.children.length;
     if (!n) return;
     const cs = getComputedStyle(box);
@@ -2302,6 +2387,7 @@
     if (p.el) {
       if (p.el.side) p.el.side.remove();
       p.el.remove();
+      if (S.spot === p.el) renderSpot();
     }
     if (p.screenEl) p.screenEl.remove();
     if (menuPeer === p) closeMemberMenu();
@@ -2929,6 +3015,7 @@
     el.className = 'screen-tile';
     el.innerHTML =
       '<video class="screen-video" playsinline></video>' +
+      '<button class="icon-btn spot-btn" type="button" title="Odakla">' + svgIcon('focus') + '</button>' +
       '<div class="screen-idle"><span class="screen-ico">' + svgIcon('monitor') + '</span><span class="screen-msg"></span>' +
       '<button class="btn primary watch-btn" type="button">Yayını izle</button></div>' +
       '<div class="screen-bar"><span class="live-badge">CANLI</span><span class="screen-name"></span><span class="spacer"></span>' +
@@ -3012,7 +3099,8 @@
     if (document.fullscreenElement) renderFloat();
     const stage = $('.stage');
     stage.classList.toggle('has-screens', tiles > 0);
-    stage.classList.toggle('focus', watched > 0);
+    stage.classList.toggle('focus', watched > 0 && !S.spot);
+    renderSpot();
     renderSelf();
     layoutTiles();
   }
@@ -4138,6 +4226,16 @@
     $('.user-panel').classList.remove('speaking');
     closePip();
     if (ft.el) ft.el.hidden = true;
+    if (S.spot) {
+      S.spot.style.removeProperty('width');
+      S.spot.remove();
+    }
+    S.spot = null;
+    if (spotMarker) spotMarker.remove();
+    spotMarker = null;
+    $('#spot').replaceChildren();
+    $('.stage').classList.remove('spotlit');
+    $('#spot').hidden = true;
     resetChat();
     clearPending();
     hideMusicResults();
@@ -4241,6 +4339,7 @@
     $('#stage-invite').onclick = copyInvite;
     initChat();
     initFloat();
+    initSpot();
 
     // Müzik paneli
     $('#music-btn').onclick = () => $('#music-panel').classList.toggle('open');

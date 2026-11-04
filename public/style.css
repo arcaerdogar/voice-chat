@@ -648,3 +648,41 @@ label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight:
 .pip-bar .icon-btn:hover { background: #2b2d31; }
 .pip-bar .icon-btn.off { background: var(--red-2); color: #fff; }
 .mini-tile video.mirror { transform: scaleX(-1); }
+
+/* ================================================================
+   Odak (Discord'daki gibi): bir kutu büyük, diğerleri altta şerit
+   ================================================================ */
+.call-strip { display: contents; }
+.spot { display: none; }
+.stage.spotlit .spot { display: flex; flex: 1; min-height: 0; align-items: center; justify-content: center; padding: 16px 16px 0; }
+.spot > .participant { flex: none; } /* genişliği app.js (fitSpot) 16:9 sığacak şekilde verir */
+.spot > .screen-tile { flex: 1; align-self: stretch; }
+.stage.spotlit .call-strip { display: flex; flex: none; align-items: center; justify-content: safe center; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 8px 16px 12px; }
+.stage.spotlit .call-strip .screens, .stage.spotlit .call-strip .participants { display: none; }
+.stage.spotlit.has-screens .call-strip .screens { display: flex; }
+.stage.spotlit .call-strip .participants { display: flex; flex: none; flex-wrap: nowrap; gap: 8px; padding: 0; overflow: visible; }
+.stage.spotlit.has-screens .call-strip .screens { flex: none; gap: 8px; padding: 0; }
+.stage.spotlit .call-strip .participant { width: 192px; cursor: pointer; }
+.stage.spotlit .call-strip .screen-tile { width: 192px; height: 108px; min-height: 0; flex: none; cursor: pointer; }
+/* Şeritteki yayın kutusu sade: sadece görüntü ve isim */
+.stage.spotlit .call-strip .screen-bar { position: absolute; left: 6px; bottom: 6px; padding: 2px 6px; border-radius: 4px; font-size: 12px; gap: 4px; }
+.stage.spotlit .call-strip .screen-bar > :not(.screen-name):not(.live-badge) { display: none !important; }
+.stage.spotlit .call-strip .screen-idle { padding: 6px; gap: 4px; }
+.stage.spotlit .call-strip .screen-msg { display: none; }
+.stage.spotlit .call-strip .screen-ico .ic { width: 26px; height: 26px; }
+.stage.spotlit .call-strip .watch-btn { padding: 3px 8px; font-size: 12px; }
+
+/* Odakla düğmesi: kutunun sağ üstünde, üzerine gelince */
+.spot-btn { position: absolute; top: 8px; right: 8px; z-index: 3; width: 30px; height: 30px; border-radius: 6px; background: rgba(0,0,0,.6); color: #fff; opacity: 0; transition: opacity .12s; }
+.spot-btn:hover { background: rgba(0,0,0,.8); color: #fff; }
+.spot-btn .ic { width: 18px; height: 18px; }
+.participant:hover .spot-btn, .screen-tile:hover .spot-btn, .spot-btn:focus-visible { opacity: 1; }
+.stage.spotlit .call-strip .spot-btn { display: none; }
+.screen-tile:fullscreen .spot-btn { display: none; }
+@media (hover: none) { .spot-btn { opacity: .85; } }
+@media (max-width: 760px) {
+  .stage.spotlit .spot { padding: 8px 8px 0; }
+  .stage.spotlit .call-strip { padding: 8px; }
+  .stage.spotlit .call-strip .participant, .stage.spotlit .call-strip .screen-tile { width: 140px; }
+  .stage.spotlit .call-strip .screen-tile { height: 79px; }
+}
