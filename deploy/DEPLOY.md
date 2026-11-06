@@ -180,13 +180,37 @@ Sonra: https://voicechat.ituacm.com/admin
 ## Sohbette dosya paylaşımı
 
 Dosyalar konteynerin `uploads` biriminde tutulur; 24 saat sonra ya da kanal boşalınca silinir, toplam 2 GB'ı geçmez.
-nginx ayarında `location ~ ^/(upload|sound)$` bloğu olmalı (`client_max_body_size 30m`); yoksa 1 MB'tan büyük dosyalar
+nginx ayarında `location = /upload` bloğu olmalı (`client_max_body_size 30m`); yoksa 1 MB'tan büyük dosyalar
 "Dosya çok büyük" hatası verir. Sınırları `.env` ile değiştirebilirsiniz: `UPLOAD_MAX_MB`, `UPLOAD_MAX_TOTAL_MB`, `UPLOAD_TTL_HOURS`
 (`UPLOAD_MAX_MB`'ı 25'in üstüne çıkarırsanız nginx'teki `client_max_body_size`'ı da artırın).
 
 ## Ses tahtası
 
-Eklenen sesler konteynerin `sounds` biriminde kalıcı tutulur (sunucu yeniden başlasa ya da imaj yeniden kurulsa da durur). En fazla 40 ses, ses başına 5 MB (`SOUND_MAX_MB`), toplam 100 MB. Ekleme/silme işlemleri yönetici panelinin olay günlüğünde görünür. Sesler `/sound` adresine yüklenir; nginx'teki genel sınır (1 MB) 5 MB'lık sesi engeller, bu yüzden ayar dosyasında `location ~ ^/(upload|sound)$` bloğu vardır.
+Ses tahtası sabittir; kullanıcılar arayüzden ses ekleyip silemez. Sesler:
+
+- Tarayıcıda sentezlenen hazır sesler (korna, alkış…)
+- Uygulamayla gelenler: depodaki `sounds/` klasörü (`sounds.json` + dosyalar)
+- Sunucuya sizin koyduklarınız: `/opt/voice-chat/data/sounds/` (konteynerde `/data/sounds`, salt okunur)
+
+Sunucuya ses eklemek için:
+
+```bash
+sudo mkdir -p /opt/voice-chat/data/sounds
+sudo cp ses.mp3 /opt/voice-chat/data/sounds/
+sudo nano /opt/voice-chat/data/sounds/sounds.json
+sudo docker compose -f /opt/voice-chat/docker-compose.yml restart riftvoice
+```
+
+`sounds.json` örneği (`effect` isteğe bağlı: `kalin`, `cokkalin`, `ince`, `sincap`, `robot`, `telsiz`, `magara`, `iblis`):
+
+```json
+[
+  { "file": "ses.mp3", "name": "Görünen ad", "emoji": "🔊", "effect": "kalin" }
+]
+```
+
+Desteklenen türler: MP3, OGG, WAV, M4A, WEBM. Liste sunucu açılırken okunur; değişiklikten sonra yeniden başlatın.
+Dosya adı sesin kimliğidir; uygulamadaki bir sesle aynı adı verirseniz onun yerine geçer.
 
 ## Sorun giderme
 - **Bir kişinin kartı "Bağlantı kurulamıyor (ağ kısıtlaması)" diyor:** TURN çalışıyor mu kontrol et (adım 6). 3478 ve 49160-49260 portlarının firewall'da açık olduğundan emin ol.

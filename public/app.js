@@ -121,7 +121,7 @@
     fx: { preset: store.get('fxPreset', 'off'), pitch: store.get('fxPitch', 0), monitor: false, temp: null },
     viaGraph: false, // gönderilen iz Web Audio zincirinden mi geliyor (gürültü engelleme ya da efekt)
     // Ses tahtası: eklenen sesler, çözülmüş ses tamponları, çalanlar, kişisel ses seviyesi
-    sb: { list: [], buffers: new Map(), playing: new Map(), vol: store.get('sbVol', 70), gain: null, maxMB: 5, maxSec: 180 },
+    sb: { list: [], buffers: new Map(), playing: new Map(), vol: store.get('sbVol', 70), gain: null },
   };
   window.__rv = S; // hata ayıklama / testler için
 
@@ -1566,7 +1566,7 @@ registerProcessor('yanki-pitch', YankiPitch);`;
     return S.sb.buffers.get(id);
   }
 
-  /** Yeni katılınca ve liste değişince sesleri arka planda indir (basınca beklemeden çalsın) */
+  /** Katılınca sesleri arka planda indir (basınca beklemeden çalsın) */
   async function prefetchSounds() {
     if (!S.ctx) return;
     for (const s of S.sb.list) {
@@ -1689,8 +1689,8 @@ registerProcessor('yanki-pitch', YankiPitch);`;
       b.querySelector('.sb-emoji').textContent = s.emoji;
       b.querySelector('.sb-name').textContent = s.name;
       const fx = s.effect ? fxPreset(s.effect) : null;
-      b.querySelector('.sb-meta').textContent = playing.length ? playing[playing.length - 1].name : fx ? fx.emoji + ' ' + fx.label : s.duration ? fmtDur(s.duration) : '';
-      b.title = s.name + (fx ? ` · çalarken sesin: ${fx.label}` : '') + (s.by ? ` · ekleyen: ${s.by}` : '');
+      b.querySelector('.sb-meta').textContent = playing.length ? playing[playing.length - 1].name : fx ? fx.emoji + ' ' + fx.label : '';
+      b.title = s.name + (fx ? ` · çalarken sesin: ${fx.label}` : '');
       if (playing.length) {
         const e = playing[playing.length - 1];
         const left = Math.max(0, e.endsAt - now) / 1000;
@@ -1701,21 +1701,9 @@ registerProcessor('yanki-pitch', YankiPitch);`;
       b.onclick = () => {
         if (!wsSend({ t: 'sound-play', id: s.id })) toast('Sunucuya bağlı değil.');
       };
-      if (!SB_BUILTIN.includes(s)) {
-        const del = document.createElement('span');
-        del.className = 'sb-del';
-        del.title = 'Ses tahtasından sil';
-        del.innerHTML = svgIcon('x');
-        del.onclick = (ev) => {
-          ev.stopPropagation();
-          if (confirm(`"${s.name}" herkes için ses tahtasından silinsin mi?`)) wsSend({ t: 'sound-delete', id: s.id });
-        };
-        b.appendChild(del);
-      }
       grid.appendChild(b);
     }
     $('#sb-stop').hidden = S.sb.playing.size === 0;
-    $('#sb-count').textContent = S.sb.list.length ? S.sb.list.length + ' eklenen' : '';
   }
 
   function setPanelTab(tab) {
@@ -1732,58 +1720,7 @@ registerProcessor('yanki-pitch', YankiPitch);`;
     }
   }
 
-  async function submitSound(e) {
-    e.preventDefault();
-    const file = $('#sb-file').files[0];
-    const note = $('#sb-note');
-    const fail = (t) => {
-      note.textContent = t;
-      note.hidden = false;
-    };
-    note.hidden = true;
-    if (!file) return fail('Bir ses dosyası seç.');
-    if (file.size > S.sb.maxMB * 1048576) return fail(`Ses dosyası en fazla ${S.sb.maxMB} MB olabilir.`);
-    if (!S.ctx) return fail('Önce kanala katıl.');
-    let duration;
-    try {
-      duration = (await S.ctx.decodeAudioData(await file.arrayBuffer())).duration;
-    } catch {
-      return fail('Bu dosya ses olarak açılamadı.');
-    }
-    if (duration > S.sb.maxSec) return fail(`Ses en fazla ${Math.round(S.sb.maxSec / 60)} dakika olabilir.`);
-    const q = new URLSearchParams({
-      k: S.streamToken || '',
-      name: $('#sb-name').value.trim() || file.name.replace(/\.[^.]+$/, ''),
-      emoji: $('#sb-emoji').value.trim(),
-      effect: $('#sb-effect').value,
-      duration: duration.toFixed(2),
-    });
-    const btn = $('#sb-save');
-    btn.disabled = true;
-    btn.textContent = 'Yükleniyor…';
-    try {
-      const r = await fetch('/sound?' + q, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) return fail(body.error || 'Ses eklenemedi (' + r.status + ').');
-      $('#sb-form').reset();
-      $('#sb-form').hidden = true;
-      $('#sb-add').hidden = false;
-      toast('Ses tahtasına eklendi: ' + body.emoji + ' ' + body.name);
-    } catch {
-      fail('Bağlantı hatası, ses eklenemedi.');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Ekle';
-    }
-  }
-
   function initFx() {
-    for (const p of FX_PRESETS.slice(1)) {
-      const o = document.createElement('option');
-      o.value = p.id;
-      o.textContent = p.emoji + ' ' + p.label;
-      $('#sb-effect').appendChild(o);
-    }
     $('#tab-music').onclick = () => setPanelTab('music');
     $('#tab-fx').onclick = () => setPanelTab('fx');
     setPanelTab(store.get('panelTab', 'music'));
@@ -1810,21 +1747,6 @@ registerProcessor('yanki-pitch', YankiPitch);`;
       if (S.sb.gain) sbOut();
     };
     $('#sb-stop').onclick = () => wsSend({ t: 'sound-stop' });
-    $('#sb-add').onclick = () => {
-      $('#sb-form').hidden = false;
-      $('#sb-add').hidden = true;
-      $('#sb-note').hidden = true;
-    };
-    $('#sb-cancel').onclick = () => {
-      $('#sb-form').reset();
-      $('#sb-form').hidden = true;
-      $('#sb-add').hidden = false;
-    };
-    $('#sb-file').onchange = () => {
-      const f = $('#sb-file').files[0];
-      if (f && !$('#sb-name').value) $('#sb-name').value = f.name.replace(/\.[^.]+$/, '').slice(0, 24);
-    };
-    $('#sb-form').addEventListener('submit', submitSound);
     renderFx();
     renderSb();
   }
@@ -2819,14 +2741,6 @@ registerProcessor('yanki-pitch', YankiPitch);`;
       case 'typing':
         onTyping(m);
         break;
-      case 'sounds': {
-        const ids = new Set(m.list.map((s) => s.id));
-        for (const id of S.sb.buffers.keys()) if (!SB_BUILTIN.some((s) => s.id === id) && !ids.has(id)) S.sb.buffers.delete(id);
-        S.sb.list = m.list;
-        renderSb();
-        prefetchSounds();
-        break;
-      }
       case 'sound':
         playSound(m);
         break;
@@ -2915,8 +2829,6 @@ registerProcessor('yanki-pitch', YankiPitch);`;
     if (m.uploadMaxMB) S.uploadMaxMB = m.uploadMaxMB;
     if (Array.isArray(m.sounds)) {
       S.sb.list = m.sounds;
-      if (m.soundMaxMB) S.sb.maxMB = m.soundMaxMB;
-      if (m.soundMaxSec) S.sb.maxSec = m.soundMaxSec;
       renderSb();
       setTimeout(prefetchSounds, 2000);
     }

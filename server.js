@@ -216,14 +216,8 @@ function createServer(options = {}) {
       ttlMs: (Number(env.UPLOAD_TTL_HOURS) || 24) * 3600 * 1000,
       log,
     });
-  // Ses tahtası: kalıcı kütüphane (tüm kanallarda ortak)
-  const sounds =
-    options.sounds ||
-    createSounds({
-      dir: env.SOUNDS_DIR || path.join(__dirname, 'sounds'),
-      maxBytes: (Number(env.SOUND_MAX_MB) || 5) * 1048576,
-      log,
-    });
+  // Ses tahtası: sabit liste (uygulamayla gelen ./sounds + sunucudaki SOUNDS_DIR)
+  const sounds = options.sounds || createSounds({ dirs: [path.join(__dirname, 'sounds'), env.SOUNDS_DIR], log });
 
   function chatOf(roomName) {
     let c = roomChat.get(roomName);
@@ -558,47 +552,6 @@ function createServer(options = {}) {
     }
   }
 
-  /** Ses tahtasına ses ekle: POST /sound?k=<anahtar>&name=&emoji=&effect=&duration= (gövde: ses dosyası) */
-  async function handleSoundUpload(req, res, url) {
-    const reply = (status, body) => {
-      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify(body));
-    };
-    const mem = streamTokens.get(url.searchParams.get('k') || '');
-    const room = mem && rooms.get(mem.room);
-    if (!room || room.get(mem.id) !== mem) {
-      req.resume();
-      return reply(403, { error: 'Ses eklemek için kanalda olmalısın.' });
-    }
-    const now = Date.now();
-    mem.soundUploads = (mem.soundUploads || []).filter((t) => now - t < 60000);
-    if (mem.soundUploads.length >= 10) {
-      req.resume();
-      return reply(429, { error: 'Çok hızlı ses ekliyorsun, biraz bekle.' });
-    }
-    mem.soundUploads.push(now);
-    try {
-      const s = await sounds.add(req, {
-        name: url.searchParams.get('name'),
-        emoji: url.searchParams.get('emoji'),
-        effect: url.searchParams.get('effect') || '',
-        duration: url.searchParams.get('duration'),
-        by: mem.name,
-      });
-      logEvent('sound', `${mem.name} ses tahtasına ekledi: ${s.emoji} ${s.name}`);
-      broadcastSounds();
-      reply(200, sounds.publicInfo(s));
-    } catch (err) {
-      reply(err.status || 500, { error: err.status ? err.message : 'Ses kaydedilemedi.' });
-    }
-  }
-
-  /** Ses tahtası listesi değişti: tüm kanallara bildir */
-  function broadcastSounds() {
-    const list = sounds.list();
-    for (const name of rooms.keys()) broadcast(name, { t: 'sounds', list });
-  }
-
   function handleHttp(req, res) {
     securityHeaders(res);
     const url = new URL(req.url, 'http://x');
@@ -624,14 +577,6 @@ function createServer(options = {}) {
     if (pathname === '/upload' && req.method === 'POST') {
       handleUpload(req, res, url).catch((err) => {
         log('upload', err.message);
-        if (!res.headersSent) res.writeHead(500);
-        res.end();
-      });
-      return;
-    }
-    if (pathname === '/sound' && req.method === 'POST') {
-      handleSoundUpload(req, res, url).catch((err) => {
-        log('sound', err.message);
         if (!res.headersSent) res.writeHead(500);
         res.end();
       });
@@ -906,8 +851,6 @@ function createServer(options = {}) {
             chat: chatOf(roomName),
             uploadMaxMB: Math.round(uploads.maxBytes / 1048576),
             sounds: sounds.list(),
-            soundMaxMB: Math.round(sounds.maxBytes / 1048576),
-            soundMaxSec: sounds.maxDuration,
           });
           return;
         }
@@ -1000,15 +943,6 @@ function createServer(options = {}) {
         case 'sound-stop': {
           if (!member || member.ws !== ws) return;
           broadcast(member.room, { t: 'sound-stop', by: member.name, from: member.id });
-          return;
-        }
-
-        case 'sound-delete': {
-          if (!member || member.ws !== ws || typeof msg.id !== 'string') return;
-          const s = sounds.remove(msg.id);
-          if (!s) return;
-          logEvent('sound', `${member.name} ses tahtasından sildi: ${s.emoji} ${s.name}`);
-          broadcastSounds();
           return;
         }
 

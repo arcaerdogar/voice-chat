@@ -15,14 +15,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY server.js sources.js ytdlp.js admin.js uploads.js sounds.js ./
+COPY sounds ./sounds
 COPY admin ./admin
 COPY public ./public
 # Sohbette paylaşılan dosyalar (geçici: 24 saat sonra ya da kanal boşalınca silinir)
 RUN mkdir -p /uploads && chown node:node /uploads
 ENV UPLOAD_DIR=/uploads
-# Ses tahtası kütüphanesi (kalıcı)
-RUN mkdir -p /sounds && chown node:node /sounds
-ENV SOUNDS_DIR=/sounds
+# Sunucuya sonradan eklenen ses tahtası sesleri (docker-compose: ./data/sounds → /data/sounds)
+ENV SOUNDS_DIR=/data/sounds
 USER node
 ENV PORT=3000
 EXPOSE 3000

@@ -73,7 +73,10 @@ function peakFreq(page, fromName) {
 
 test('efektler ve ses tahtası', { timeout: 180000 }, async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yanki-sounds-'));
-  const srv = createServer({ quiet: true, env: { SOUNDS_DIR: dir, SOUND_MAX_MB: '1' } });
+  // Sunucuya sonradan eklenen ses: 3 sn ton, çalarken robot efekti
+  fs.writeFileSync(path.join(dir, 'bip.wav'), wav(3, 330));
+  fs.writeFileSync(path.join(dir, 'sounds.json'), JSON.stringify([{ file: 'bip.wav', name: 'Bip', emoji: '🤖', effect: 'robot' }, { file: 'yok.mp3', name: 'Eksik' }]));
+  const srv = createServer({ quiet: true, env: { SOUNDS_DIR: dir } });
   await new Promise((r) => srv.server.listen(PORT, r));
   const browser = await chromium.launch({
     channel: 'chrome',
@@ -98,7 +101,7 @@ test('efektler ve ses tahtası', { timeout: 180000 }, async (t) => {
     assert.equal(await A.isVisible('#mp-music'), false);
     assert.equal(await A.locator('#mp-music').count(), 1, 'müzik bölümü DOM\'da kalmalı (oynatıcı durmasın)');
     assert.equal(await A.locator('.fx-chip').count(), 9);
-    assert.equal(await A.locator('.sb-btn').count(), 6, 'hazır sesler');
+    assert.equal(await A.locator('.sb-btn').count(), 8, '6 hazır + Hamam böceği + sunucuya eklenen');
   });
 
   await t.test('kalın ses: karşı tarafın duyduğu ton ~0,75 kat düşer', async () => {
@@ -142,61 +145,44 @@ test('efektler ve ses tahtası', { timeout: 180000 }, async (t) => {
     await B.waitForSelector('.sb-btn[data-id=korna]:not(.playing)', { timeout: 5000 });
   });
 
-  let soundId;
-  await t.test('ses eklenir (efektli), herkesin ses tahtasında görünür', async () => {
-    await A.click('#sb-add');
-    await A.setInputFiles('#sb-file', { name: 'hamam-bocegi.wav', mimeType: 'audio/wav', buffer: wav(3, 330) });
-    assert.equal(await A.inputValue('#sb-name'), 'hamam-bocegi');
-    await A.fill('#sb-name', 'Hamam böceği');
-    await A.fill('#sb-emoji', '🪳');
-    await A.selectOption('#sb-effect', 'kalin');
-    await A.click('#sb-save');
-    const btn = B.locator('.sb-btn', { hasText: 'Hamam böceği' });
-    await btn.waitFor({ timeout: 5000 });
-    assert.match(await btn.textContent(), /🪳/);
-    assert.match(await btn.getAttribute('title'), /çalarken sesin: Kalın/);
-    soundId = await btn.getAttribute('data-id');
-    assert.equal(fs.readdirSync(dir).filter((f) => f.endsWith('.wav')).length, 1);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'sounds.json'), 'utf8'))[0].effect, 'kalin');
+  await t.test('sabit sesler: uygulamadaki Hamam böceği ve sunucuya eklenen ses; ekleme/silme yok', async () => {
+    const hamam = B.locator('.sb-btn[data-id=hamam-bocegi]');
+    await hamam.waitFor();
+    assert.match(await hamam.textContent(), /🪳.*Hamam böceği/);
+    assert.match(await hamam.getAttribute('title'), /çalarken sesin: Kalın/);
+    assert.match(await B.locator('.sb-btn[data-id=bip]').getAttribute('title'), /Robot/);
+    assert.equal(await B.locator('.sb-btn', { hasText: 'Eksik' }).count(), 0, 'dosyası olmayan girdi atlanmalı');
+    assert.equal(await B.locator('.sb-btn').count(), 8);
+    assert.equal(await A.locator('#sb-add, .sb-del, #sb-form').count(), 0, 'arayüzde ekleme/silme olmamalı');
+    const token = await A.evaluate(() => window.__rv.streamToken);
+    assert.notEqual((await fetch(`${BASE}/sound?k=${token}&name=x&duration=2`, { method: 'POST', body: wav(1, 440) })).status, 200);
+    assert.equal((await fetch(`${BASE}/sounds/hamam-bocegi`)).status, 403, 'anahtarsız indirilemez');
+    const r = await fetch(`${BASE}/sounds/hamam-bocegi?k=${token}`);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers.get('content-type'), 'audio/mpeg');
   });
 
-  await t.test('ses + efekt: çalan kişinin sesi ses bitene kadar kalınlaşır', async () => {
-    await A.click(`.sb-btn[data-id="${soundId}"]`);
-    // Herkeste çalar; Ahri'nin kutusunda efekt görünür
-    for (const p of [A, B]) await p.waitForSelector(`.sb-btn[data-id="${soundId}"].playing`, { timeout: 8000 });
+  await t.test('Hamam böceği: müzik herkeste çalar, çalanın sesi kalınlaşır; durdurunca ikisi de biter', async () => {
+    await B.waitForFunction(() => window.__rv.sb.buffers.has('hamam-bocegi'), null, { timeout: 15000 });
+    await A.click('.sb-btn[data-id=hamam-bocegi]');
+    for (const p of [A, B]) await p.waitForSelector('.sb-btn[data-id=hamam-bocegi].playing', { timeout: 15000 });
     await aOnB.locator('.i-fx').waitFor({ state: 'visible' });
     assert.equal(await aOnB.locator('.i-fx').getAttribute('title'), 'Ses efekti: Kalın');
     assert.match(await A.textContent('#fx-cur'), /Kalın \(ses tahtası\)/);
-    // Bitince normale döner
-    await aOnB.locator('.i-fx').waitFor({ state: 'hidden', timeout: 8000 });
-    assert.equal(await A.evaluate(() => window.__rv.fx.temp), null);
-  });
-
-  await t.test('başkası durdurunca ses ve efekt biter', async () => {
-    await A.click(`.sb-btn[data-id="${soundId}"]`);
-    await aOnB.locator('.i-fx').waitFor({ state: 'visible' });
+    assert.equal(await A.evaluate(() => window.__rv.fx.temp.preset), 'kalin');
+    // Başkası durdurur
     await B.click('#sb-stop');
     await aOnB.locator('.i-fx').waitFor({ state: 'hidden', timeout: 3000 });
-    await A.waitForFunction(() => window.__rv.sb.playing.size === 0);
+    await A.waitForFunction(() => window.__rv.sb.playing.size === 0 && window.__rv.fx.temp === null);
   });
 
-  await t.test('silinir; güvenlik kontrolleri', async () => {
-    const token = await A.evaluate(() => window.__rv.streamToken);
-    // Anahtarsız indirme yok; ses olmayan dosya reddedilir; sınır uygulanır
-    assert.equal((await fetch(`${BASE}/sounds/${soundId}`)).status, 403);
-    assert.equal((await fetch(`${BASE}/sounds/${soundId}?k=${token}`)).status, 200);
-    let r = await fetch(`${BASE}/sound?k=${token}&name=x&duration=2`, { method: 'POST', body: '<html>merhaba</html>' });
-    assert.equal(r.status, 415);
-    r = await fetch(`${BASE}/sound?k=${token}&name=x&duration=2`, { method: 'POST', body: Buffer.alloc(1.5 * 1048576) });
-    assert.equal(r.status, 413);
-    r = await fetch(`${BASE}/sound?k=yanlis&name=x&duration=2`, { method: 'POST', body: wav(1, 440) });
-    assert.equal(r.status, 403);
-    // Sil
-    A.once('dialog', (d) => d.accept());
-    await A.locator(`.sb-btn[data-id="${soundId}"]`).hover();
-    await A.click(`.sb-btn[data-id="${soundId}"] .sb-del`);
-    await B.locator(`.sb-btn[data-id="${soundId}"]`).waitFor({ state: 'detached', timeout: 5000 });
-    assert.equal(fs.readdirSync(dir).filter((f) => f.endsWith('.wav')).length, 0);
+  await t.test('efektli ses kendiliğinden bitince efekt de biter', async () => {
+    await B.click('.sb-btn[data-id=bip]');
+    const bOnA = A.locator('.participant', { has: A.locator('.name', { hasText: 'Bora' }) });
+    await bOnA.locator('.i-fx').waitFor({ state: 'visible', timeout: 8000 });
+    assert.equal(await bOnA.locator('.i-fx').getAttribute('title'), 'Ses efekti: Robot');
+    await bOnA.locator('.i-fx').waitFor({ state: 'hidden', timeout: 8000 });
+    assert.equal(await B.evaluate(() => window.__rv.fx.temp), null);
   });
 
   await t.test('konsolda hata yok', () => {

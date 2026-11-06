@@ -267,23 +267,11 @@
         </section>
 
         <section class="mp-section">
-          <div class="mp-sec-head"><span>Ses tahtası</span><span id="sb-count" class="muted"></span></div>
+          <div class="mp-sec-head"><span>Ses tahtası</span></div>
           <div id="sb-grid" class="sb-grid"></div>
           <button id="sb-stop" class="btn small danger sb-stop" type="button" hidden>Çalanları durdur</button>
-          <button id="sb-add" class="sb-add" type="button"><svg class="ic"><use href="#i-plus-circle"/></svg>Ses ekle</button>
-          <form id="sb-form" class="sb-form" autocomplete="off" hidden>
-            <input type="file" id="sb-file" accept="audio/*,.mp3,.ogg,.wav,.m4a,.webm">
-            <div class="sb-form-row">
-              <input id="sb-emoji" maxlength="8" placeholder="🔊" aria-label="Simge (emoji)">
-              <input id="sb-name" maxlength="24" placeholder="Ad" aria-label="Ses adı">
-            </div>
-            <label class="sb-label" for="sb-effect">Çalarken sesimi değiştir</label>
-            <select id="sb-effect"><option value="">Değiştirme</option></select>
-            <p id="sb-note" class="error" hidden></p>
-            <div class="sb-form-row"><button id="sb-cancel" class="btn ghost small" type="button">Vazgeç</button><button id="sb-save" class="btn primary small" type="submit">Ekle</button></div>
-          </form>
           <span class="vol-wrap" title="Ses tahtası sesi (sadece senin için)"><svg class="ic"><use href="#i-speaker"/></svg><input type="range" id="sb-vol" min="0" max="100" value="70" aria-label="Ses tahtası sesi"><span id="sb-vol-val" class="num">70%</span></span>
-          <p class="mp-hint">Bastığın ses kanaldaki herkeste aynı anda çalar. Bir sese efekt bağlarsan, o sesi çalan kişinin sesi ses bitene kadar o efektle gider.</p>
+          <p class="mp-hint">Bastığın ses kanaldaki herkeste aynı anda çalar. Efekt işaretli seslerde, sesi çalan kişinin sesi ses bitene kadar o efektle gider.</p>
         </section>
       </div>
     </aside>
