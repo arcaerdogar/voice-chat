@@ -25,6 +25,7 @@ services:
     volumes:
       - ./data:/data:ro
       - uploads:/uploads
+      - sounds:/sounds
     # Sadece sunucunun içinden erişilir; dışarıya nginx açar.
     ports:
       - "127.0.0.1:4010:3000"
@@ -45,3 +46,4 @@ services:
 
 volumes:
   uploads:
+  sounds:

@@ -20,7 +20,8 @@
     "test:chat": "node --test test/chat.test.js",
     "test:float": "node --test test/float.test.js",
     "test:duck": "node --test test/duck.test.js",
-    "test:spot": "node --test test/spot.test.js"
+    "test:spot": "node --test test/spot.test.js",
+    "test:fx": "node --test test/fx.test.js"
   },
   "engines": {
     "node": ">=18"

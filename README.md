@@ -32,6 +32,7 @@ Bu senaryoların hepsi `test/e2e.test.js` içinde gerçek Chrome örnekleriyle t
   karıştır/önceki/oynat/sonraki/tekrar, isteğe bağlı "biri konuşunca müziği kıs" (ayarlardan, seviye kişiye özel), sıradakiler (kapak + süre, "sıradaki yap", çıkar), son çalınanlar
 - **Yönetici paneli** (`/admin`, linksiz; .env'deki kullanıcı/şifreyle): anlık kanallar ve kişiler (IP, ülke, cihaz, bağlantı
   kalitesi), atma, IP yasaklama, susturma, kanal kilitleme/kapatma, müzik kontrolü, duyuru, olay günlüğü
+- **Efektler** (sağ panelde Müzik'in yanındaki sekme): ses efektleri (kalın, çok kalın, ince, sincap, robot, telsiz, mağara, iblis; ton ayarı, kendini dinle) ve ses tahtası. Hazır sesler tarayıcıda sentezlenir; kendi seslerinizi (en fazla 5 MB / 3 dk) ekleyebilirsiniz. Bir sese efekt bağlanırsa, o sesi çalan kişinin sesi ses bitene kadar o efektle gider (ör. arkada müzik + kalın ses). Ses tahtası herkesin kendi cihazında aynı anda çalar
 - **Odak** (Discord gibi): bir kutuyu (kamera, kişi ya da yayın) büyütme düğmesiyle ya da tıklayarak odağa al; diğerleri altta küçük şeritte durur, şeritten seçince odak değişir, Esc ile çıkılır
 - **Kayan kişi kutuları**: yayın tam ekrandayken diğer kişiler sürüklenebilir küçük kutularda görünür (konuşma halkası, kamera, susturma; yatay/dikey, kapatılabilir). Sekmeden çıkınca ya da sol üstteki düğmeyle açılan **mini pencere** her zaman üstte durur; başka programa (oyuna) geçince de görünür, mikrofon/ses düğmeleri vardır (Chrome/Edge)
 - **Kamera**: kişinin kutusunda avatar yerine görüntüsü (640×360, 24 fps, kişi başı en fazla ~500 kbit/sn). Telefonda da çalışır; ayarlardan kamera seçilir.
@@ -145,6 +146,8 @@ Bir VPS'te HTTPS için önüne Caddy koymak en kolayıdır (`caddy reverse-proxy
 | `UPLOAD_DIR` | `./uploads` | Sohbette paylaşılan dosyaların geçici klasörü (açılışta temizlenir) |
 | `UPLOAD_MAX_MB` | `25` | Dosya başına en büyük boyut |
 | `UPLOAD_MAX_TOTAL_MB` | `2048` | Tüm dosyaların toplam disk sınırı (dolunca en eskiler silinir) |
+| `SOUNDS_DIR` | `./sounds` | Ses tahtası kütüphanesi (kalıcı; Docker'da `sounds` birimi) |
+| `SOUND_MAX_MB` | `5` | Ses tahtasına eklenen ses başına en büyük boyut |
 | `UPLOAD_TTL_HOURS` | `24` | Dosyaların saklanma süresi |
 
 ### TURN sunucusu gerekli mi?
@@ -162,6 +165,7 @@ npm run test:turn     # gerçek coturn (Docker) ile röle testi
 npm run test:noise    # yapay zekâ gürültü engelleme ölçümü
 npm run test:music    # gerçek YouTube/SoundCloud oynatıcısıyla müzik testi (erişilemezse atlanır)
 npm run test:admin    # yönetici paneli testleri (güvenlik + işlemler + arayüz)
+npm run test:fx       # ses efektleri (ton ölçülür) ve ses tahtası
 npm run test:spot     # odak: bir kutu büyük, diğerleri şeritte
 npm run test:duck     # biri konuşunca müziği kısma
 npm run test:float    # tam ekranda kayan kişi kutuları ve mini pencere

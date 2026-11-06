@@ -117,6 +117,11 @@
     camId: store.get('camId', ''),
     transmitting: false,
     uploadMaxMB: 25,
+    // Ses efekti: seçilen hazır ayar, ton (yarım ton), kendini dinle, ses tahtasından gelen geçici efekt
+    fx: { preset: store.get('fxPreset', 'off'), pitch: store.get('fxPitch', 0), monitor: false, temp: null },
+    viaGraph: false, // gönderilen iz Web Audio zincirinden mi geliyor (gürültü engelleme ya da efekt)
+    // Ses tahtası: eklenen sesler, çözülmüş ses tamponları, çalanlar, kişisel ses seviyesi
+    sb: { list: [], buffers: new Map(), playing: new Map(), vol: store.get('sbVol', 70), gain: null, maxMB: 5, maxSec: 180 },
   };
   window.__rv = S; // hata ayıklama / testler için
 
@@ -1179,6 +1184,651 @@
     el.classList.toggle('muted-local', p.localMuted);
   }
 
+  // =====================================================================
+  // Efektler: ses efektleri (mikrofon sesine uygulanır) ve ses tahtası
+  // =====================================================================
+  // Mikrofon zinciri: ham ses → [RNNoise] → fxIn → (efekt zinciri) → sendGain (sustur/eşik) → gönderim
+  const FX_PRESETS = [
+    { id: 'off', label: 'Kapalı', emoji: '🚫', pitch: 0, mode: '' },
+    { id: 'kalin', label: 'Kalın', emoji: '🐻', pitch: -5, mode: '' },
+    { id: 'cokkalin', label: 'Çok kalın', emoji: '🦍', pitch: -9, mode: '' },
+    { id: 'ince', label: 'İnce', emoji: '🐤', pitch: 5, mode: '' },
+    { id: 'sincap', label: 'Sincap', emoji: '🐿️', pitch: 9, mode: '' },
+    { id: 'robot', label: 'Robot', emoji: '🤖', pitch: 0, mode: 'robot' },
+    { id: 'telsiz', label: 'Telsiz', emoji: '📻', pitch: 0, mode: 'radio' },
+    { id: 'magara', label: 'Mağara', emoji: '🏔️', pitch: 0, mode: 'cave' },
+    { id: 'iblis', label: 'İblis', emoji: '😈', pitch: -7, mode: 'demon' },
+  ];
+  const fxPreset = (id) => FX_PRESETS.find((p) => p.id === id) || FX_PRESETS[0];
+
+  // Ton kaydırma: iki üst üste binen okuma kafalı gecikme hattı (granüler). ~43 ms pencere,
+  // ortalama ~21 ms ek gecikme; konuşma için yeterli kalite.
+  const FX_WORKLET = `
+class YankiPitch extends AudioWorkletProcessor {
+  static get parameterDescriptors() { return [{ name: 'ratio', defaultValue: 1, minValue: 0.25, maxValue: 4 }]; }
+  constructor() { super(); this.N = 8192; this.buf = new Float32Array(this.N); this.w = 0; this.phase = 0; this.W = 2048; }
+  read(pos) {
+    const N = this.N; pos = ((pos % N) + N) % N;
+    const i = Math.floor(pos), f = pos - i;
+    return this.buf[i] * (1 - f) + this.buf[(i + 1) % N] * f;
+  }
+  process(inputs, outputs, params) {
+    const inp = inputs[0] && inputs[0][0];
+    const out = outputs[0] && outputs[0][0];
+    if (!out) return true;
+    const r = params.ratio, W = this.W, N = this.N;
+    for (let i = 0; i < out.length; i++) {
+      this.buf[this.w] = inp ? inp[i] : 0;
+      const ratio = r.length > 1 ? r[i] : r[0];
+      this.phase += (1 - ratio) / W;
+      if (this.phase >= 1) this.phase -= 1;
+      else if (this.phase < 0) this.phase += 1;
+      const p2 = (this.phase + 0.5) % 1;
+      const g1 = Math.sin(Math.PI * this.phase), g2 = Math.sin(Math.PI * p2);
+      out[i] = this.read(this.w - this.phase * W) * g1 * g1 + this.read(this.w - p2 * W) * g2 * g2;
+      this.w = (this.w + 1) % N;
+    }
+    for (let c = 1; c < outputs[0].length; c++) outputs[0][c].set(out);
+    return true;
+  }
+}
+registerProcessor('yanki-pitch', YankiPitch);`;
+  let fxWorkletReady = null;
+  let fxWorkletOk = false;
+  function loadFxWorklet() {
+    if (!S.ctx || !S.ctx.audioWorklet) return Promise.reject(new Error('AudioWorklet yok'));
+    if (!fxWorkletReady) {
+      const url = URL.createObjectURL(new Blob([FX_WORKLET], { type: 'application/javascript' }));
+      fxWorkletReady = S.ctx.audioWorklet.addModule(url).then(() => (fxWorkletOk = true));
+      fxWorkletReady.catch(() => (fxWorkletReady = null));
+    }
+    return fxWorkletReady;
+  }
+
+  /** Şu an uygulanan efekt: ses tahtası kombinasyonu (geçici) ya da kişinin seçtiği */
+  function effectiveFx() {
+    if (S.fx.temp) return fxPreset(S.fx.temp.preset);
+    const p = fxPreset(S.fx.preset);
+    return { ...p, pitch: S.fx.pitch, label: p.id === 'off' && S.fx.pitch ? 'Özel' : p.label };
+  }
+  const fxOn = () => {
+    const e = effectiveFx();
+    return !!(e.pitch || e.mode);
+  };
+  const fxLabel = () => (fxOn() ? effectiveFx().label : '');
+  const needGraph = () => !!S.rawTrack && (S.aiNs || fxOn() || S.fx.monitor);
+
+  /** Efekt zincirinin giriş/çıkışı ve gönderim düğümleri (RNNoise olsun olmasın) */
+  function ensureGraph() {
+    if (S.fxIn) return;
+    S.sendGain = S.ctx.createGain();
+    S.sendGain.gain.value = 0;
+    S.procDest = S.ctx.createMediaStreamDestination();
+    S.procDest.channelCount = 1;
+    S.sendGain.connect(S.procDest);
+    S.fxIn = S.ctx.createGain();
+    S.fxIn.connect(S.sendGain);
+  }
+
+  function shaper(k) {
+    const n = 2048;
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = (i * 2) / n - 1;
+      curve[i] = ((1 + k) * x) / (1 + k * Math.abs(x));
+    }
+    const ws = S.ctx.createWaveShaper();
+    ws.curve = curve;
+    ws.oversample = '2x';
+    return ws;
+  }
+
+  function reverbIR(seconds, decay) {
+    const rate = S.ctx.sampleRate;
+    const len = Math.floor(rate * seconds);
+    const buf = S.ctx.createBuffer(1, len, rate);
+    const d = buf.getChannelData(0);
+    let seed = 7;
+    for (let i = 0; i < len; i++) {
+      seed = (seed * 16807) % 2147483647;
+      d[i] = ((seed / 2147483647) * 2 - 1) * Math.pow(1 - i / len, decay);
+    }
+    return buf;
+  }
+
+  /** Efekt için Web Audio düğümleri; yoksa null (doğrudan geçiş) */
+  function buildFxChain(e) {
+    if (!e.pitch && !e.mode) return null;
+    const ctx = S.ctx;
+    const nodes = [];
+    const add = (n) => (nodes.push(n), n);
+    const input = add(ctx.createGain());
+    let last = input;
+    const to = (n) => {
+      last.connect(n);
+      last = n;
+      return n;
+    };
+    const filter = (type, freq, q) => {
+      const f = add(ctx.createBiquadFilter());
+      f.type = type;
+      f.frequency.value = freq;
+      if (q) f.Q.value = q;
+      return f;
+    };
+    if (e.pitch && fxWorkletOk) {
+      const ps = add(new AudioWorkletNode(ctx, 'yanki-pitch', { channelCount: 1, channelCountMode: 'explicit', outputChannelCount: [1] }));
+      ps.parameters.get('ratio').value = Math.pow(2, e.pitch / 12);
+      to(ps);
+    }
+    if (e.mode === 'robot') {
+      // Halka modülasyonu: ses × 55 Hz sinüs
+      const rm = add(ctx.createGain());
+      rm.gain.value = 0;
+      const osc = add(ctx.createOscillator());
+      osc.frequency.value = 55;
+      osc.connect(rm.gain);
+      osc.start();
+      to(rm);
+      const g = add(ctx.createGain());
+      g.gain.value = 1.6;
+      to(g);
+    } else if (e.mode === 'radio') {
+      to(filter('highpass', 450, 0.9));
+      to(filter('lowpass', 3000, 0.9));
+      to(add(shaper(30)));
+      const g = add(ctx.createGain());
+      g.gain.value = 0.7;
+      to(g);
+    } else if (e.mode === 'demon') {
+      to(filter('lowpass', 2600));
+      to(add(shaper(5)));
+    }
+    if (e.mode === 'cave' || e.mode === 'demon') {
+      const out = add(ctx.createGain());
+      const dry = add(ctx.createGain());
+      const wet = add(ctx.createGain());
+      const conv = add(ctx.createConvolver());
+      dry.gain.value = e.mode === 'cave' ? 0.8 : 1;
+      wet.gain.value = e.mode === 'cave' ? 1.1 : 0.4;
+      conv.buffer = reverbIR(e.mode === 'cave' ? 2.6 : 1.2, e.mode === 'cave' ? 2.5 : 3);
+      last.connect(dry).connect(out);
+      last.connect(conv).connect(wet).connect(out);
+      last = out;
+    }
+    return {
+      input,
+      output: last,
+      dispose() {
+        for (const n of nodes) {
+          try {
+            n.disconnect();
+            if (n.stop) n.stop();
+          } catch {}
+        }
+      },
+    };
+  }
+
+  /** Efekt değişti: zinciri yeniden kur, gerekirse gönderilen izi değiştir, diğerlerine bildir */
+  let fxApplying = Promise.resolve();
+  function applyFx() {
+    fxApplying = fxApplying.then(applyFxNow, applyFxNow);
+    return fxApplying;
+  }
+  async function applyFxNow() {
+    renderFx();
+    if (S.joined) publishState();
+    if (!S.ctx || !S.rawTrack) return;
+    if (needGraph() !== !!S.viaGraph) await rebuildSendTrack();
+    if (!S.fxIn) return;
+    const e = effectiveFx();
+    if (e.pitch) {
+      try {
+        await loadFxWorklet();
+      } catch (err) {
+        console.warn('fx worklet', err);
+      }
+    }
+    if (S.fxChain) S.fxChain.dispose();
+    S.fxIn.disconnect();
+    S.fxChain = buildFxChain(e);
+    if (S.fxChain) {
+      S.fxIn.connect(S.fxChain.input);
+      S.fxChain.output.connect(S.sendGain);
+    } else S.fxIn.connect(S.sendGain);
+    applyMonitor();
+  }
+
+  /** Kendini dinle: diğerlerine giden sesi (efekt + eşik dahil) kendi hoparlöründe çal */
+  function applyMonitor() {
+    if (!S.ctx || !S.sendGain) return;
+    if (!S.monGain) {
+      S.monGain = S.ctx.createGain();
+      S.monGain.connect(S.ctx.destination);
+      S.sendGain.connect(S.monGain);
+    }
+    S.monGain.gain.value = S.fx.monitor && !S.deafened ? 1 : 0;
+  }
+
+  // ---- Ses tahtası ----
+  const SB_BUILTIN = [
+    { id: 'korna', name: 'Korna', emoji: '📯' },
+    { id: 'davul', name: 'Ba dum tss', emoji: '🥁' },
+    { id: 'alkis', name: 'Alkış', emoji: '👏' },
+    { id: 'trombon', name: 'Hüzünlü', emoji: '🎺' },
+    { id: 'zil', name: 'Zil', emoji: '🔔' },
+    { id: 'kriket', name: 'Cırcır', emoji: '🦗' },
+  ];
+  const sbMeta = (id) => SB_BUILTIN.find((s) => s.id === id) || S.sb.list.find((s) => s.id === id) || null;
+
+  /** Hazır sesler tarayıcıda sentezlenir (dosya yok, telif yok; herkeste aynı) */
+  async function synthSound(id) {
+    const rate = 48000;
+    const dur = { korna: 1.5, davul: 1.7, alkis: 2.4, trombon: 3.2, zil: 1.8, kriket: 2.2 }[id];
+    const ctx = new OfflineAudioContext(1, Math.ceil(rate * dur), rate);
+    const master = ctx.createGain();
+    master.gain.value = 0.55;
+    master.connect(ctx.destination);
+    let seed = 12345;
+    const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const noise = (len) => {
+      const b = ctx.createBuffer(1, Math.ceil(rate * len), rate);
+      const d = b.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = rnd() * 2 - 1;
+      const s = ctx.createBufferSource();
+      s.buffer = b;
+      return s;
+    };
+    const env = (g, t, a, hold, r, peak = 1) => {
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(peak, t + a);
+      g.gain.setValueAtTime(peak, t + a + hold);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + a + hold + r);
+    };
+    if (id === 'korna') {
+      for (const [t, len] of [[0, 0.2], [0.27, 0.2], [0.55, 0.9]]) {
+        const g = ctx.createGain();
+        const lp = ctx.createBiquadFilter();
+        lp.frequency.value = 2800;
+        g.connect(lp).connect(master);
+        env(g, t, 0.015, len, 0.08, 0.5);
+        for (const f of [440, 554, 659]) {
+          const o = ctx.createOscillator();
+          o.type = 'sawtooth';
+          o.frequency.setValueAtTime(f * 0.97, t);
+          o.frequency.linearRampToValueAtTime(f, t + 0.05);
+          o.connect(g);
+          o.start(t);
+          o.stop(t + len + 0.1);
+        }
+      }
+    } else if (id === 'davul') {
+      for (const [t, f0] of [[0, 190], [0.2, 140]]) {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.frequency.setValueAtTime(f0, t);
+        o.frequency.exponentialRampToValueAtTime(f0 / 2, t + 0.25);
+        o.connect(g).connect(master);
+        env(g, t, 0.003, 0.02, 0.3, 1);
+        o.start(t);
+        o.stop(t + 0.4);
+      }
+      const n = noise(1.2);
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 6500;
+      const g = ctx.createGain();
+      n.connect(hp).connect(g).connect(master);
+      env(g, 0.48, 0.002, 0.02, 1.1, 0.7);
+      n.start(0.48);
+    } else if (id === 'alkis') {
+      for (let i = 0; i < 140; i++) {
+        const t = rnd() * 1.9;
+        const n = noise(0.05);
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = 900 + rnd() * 1600;
+        bp.Q.value = 0.9;
+        const g = ctx.createGain();
+        n.connect(bp).connect(g).connect(master);
+        env(g, t, 0.001, 0.004, 0.04, 0.35 + rnd() * 0.4);
+        n.start(t);
+      }
+    } else if (id === 'trombon') {
+      const notes = [[0, 0.5, 311], [0.55, 0.5, 294], [1.1, 0.5, 277], [1.65, 1.4, 262]];
+      for (const [t, len, f] of notes) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = f;
+        const lp = ctx.createBiquadFilter();
+        lp.type = 'lowpass';
+        lp.Q.value = 6;
+        lp.frequency.setValueAtTime(300, t);
+        lp.frequency.linearRampToValueAtTime(1400, t + 0.15);
+        lp.frequency.linearRampToValueAtTime(500, t + len);
+        const g = ctx.createGain();
+        o.connect(lp).connect(g).connect(master);
+        env(g, t, 0.04, len - 0.12, 0.1, 0.6);
+        if (len > 1) {
+          const lfo = ctx.createOscillator();
+          const depth = ctx.createGain();
+          lfo.frequency.value = 5.5;
+          depth.gain.value = 6;
+          lfo.connect(depth).connect(o.frequency);
+          lfo.start(t + 0.3);
+          lfo.stop(t + len);
+        }
+        o.start(t);
+        o.stop(t + len + 0.1);
+      }
+    } else if (id === 'zil') {
+      for (const [f, a] of [[1318, 0.6], [2637, 0.25], [3951, 0.1]]) {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.frequency.value = f;
+        o.connect(g).connect(master);
+        env(g, 0, 0.003, 0.01, 1.7, a);
+        o.start(0);
+        o.stop(1.8);
+      }
+    } else if (id === 'kriket') {
+      for (let k = 0; k < 4; k++) {
+        const t0 = k * 0.52;
+        for (let j = 0; j < 4; j++) {
+          const t = t0 + j * 0.035;
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.frequency.value = 4600;
+          o.connect(g).connect(master);
+          env(g, t, 0.003, 0.012, 0.012, 0.25);
+          o.start(t);
+          o.stop(t + 0.04);
+        }
+      }
+    }
+    return ctx.startRendering();
+  }
+
+  function getSoundBuffer(id) {
+    if (!S.sb.buffers.has(id)) {
+      const p = SB_BUILTIN.some((s) => s.id === id)
+        ? synthSound(id)
+        : fetch(`/sounds/${encodeURIComponent(id)}?k=${encodeURIComponent(S.streamToken || '')}`)
+            .then((r) => {
+              if (!r.ok) throw new Error('ses ' + r.status);
+              return r.arrayBuffer();
+            })
+            .then((b) => S.ctx.decodeAudioData(b));
+      p.catch(() => S.sb.buffers.delete(id));
+      S.sb.buffers.set(id, p);
+    }
+    return S.sb.buffers.get(id);
+  }
+
+  /** Yeni katılınca ve liste değişince sesleri arka planda indir (basınca beklemeden çalsın) */
+  async function prefetchSounds() {
+    if (!S.ctx) return;
+    for (const s of S.sb.list) {
+      if (!S.joined) return;
+      await getSoundBuffer(s.id).catch(() => {});
+    }
+  }
+
+  function sbOut() {
+    if (!S.sb.gain) {
+      S.sb.gain = S.ctx.createGain();
+      S.sb.gain.connect(S.ctx.destination);
+    }
+    S.sb.gain.gain.value = S.deafened ? 0 : S.sb.vol / 100;
+    return S.sb.gain;
+  }
+
+  async function playSound(m) {
+    if (!S.ctx || !S.joined) return;
+    let buf;
+    try {
+      buf = await getSoundBuffer(m.id);
+    } catch (err) {
+      console.warn('ses tahtası', m.id, err);
+      return;
+    }
+    if (!S.joined) return;
+    // Herkeste aynı anda: sunucunun verdiği zamanda başla; geç yüklendiyse o kadar ileriden
+    const delay = (m.at - serverTime()) / 1000;
+    const offset = Math.max(0, -delay);
+    if (offset >= buf.duration) return;
+    const src = S.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(sbOut());
+    src.start(S.ctx.currentTime + Math.max(0, delay), offset);
+    const entry = { src, id: m.id, from: m.from, name: m.name, endsAt: Date.now() + (Math.max(0, delay) + buf.duration - offset) * 1000, dur: buf.duration };
+    S.sb.playing.set(m.play, entry);
+    src.onended = () => {
+      S.sb.playing.delete(m.play);
+      if (S.fx.temp && S.fx.temp.play === m.play) {
+        S.fx.temp = null;
+        applyFx();
+      }
+      renderSb();
+    };
+    // Kombinasyon: sesi ben çaldıysam ve sese bir efekt bağlıysa, ses bitene kadar sesime uygula
+    const meta = sbMeta(m.id);
+    if (m.from === S.id && meta && meta.effect) {
+      S.fx.temp = { play: m.play, preset: meta.effect };
+      applyFx();
+    }
+    renderSb();
+  }
+
+  function stopSounds() {
+    for (const e of S.sb.playing.values()) {
+      try {
+        e.src.stop();
+      } catch {}
+    }
+    S.sb.playing.clear();
+    if (S.fx.temp) {
+      S.fx.temp = null;
+      applyFx();
+    }
+    renderSb();
+  }
+
+  // ---- Efektler sekmesi arayüzü ----
+  function renderFx() {
+    const e = effectiveFx();
+    const box = $('#fx-presets');
+    if (box && !box.children.length) {
+      for (const p of FX_PRESETS) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'fx-chip';
+        b.dataset.id = p.id;
+        b.innerHTML = '<span class="fx-emoji"></span><span class="fx-name"></span>';
+        b.querySelector('.fx-emoji').textContent = p.emoji;
+        b.querySelector('.fx-name').textContent = p.label;
+        b.onclick = () => {
+          S.fx.preset = p.id;
+          S.fx.pitch = p.pitch;
+          store.set('fxPreset', S.fx.preset);
+          store.set('fxPitch', S.fx.pitch);
+          applyFx();
+        };
+        box.appendChild(b);
+      }
+    }
+    for (const b of document.querySelectorAll('.fx-chip')) b.classList.toggle('on', b.dataset.id === S.fx.preset && !(S.fx.preset === 'off' && S.fx.pitch));
+    $('#fx-pitch').value = S.fx.pitch;
+    $('#fx-pitch-val').textContent = S.fx.pitch > 0 ? '+' + S.fx.pitch : String(S.fx.pitch);
+    $('#fx-cur').textContent = S.fx.temp ? e.label + ' (ses tahtası)' : fxOn() ? e.label : 'Kapalı';
+    const mon = $('#fx-monitor');
+    mon.classList.toggle('on', S.fx.monitor);
+    mon.setAttribute('aria-checked', String(S.fx.monitor));
+    $('#fx-dot').hidden = !fxOn();
+    if (S.selfEl) {
+      const i = S.selfEl.querySelector('.i-fx');
+      i.hidden = !fxOn();
+      i.title = 'Ses efekti: ' + fxLabel();
+    }
+  }
+
+  function renderSb() {
+    const grid = $('#sb-grid');
+    if (!grid) return;
+    const all = [...SB_BUILTIN, ...S.sb.list];
+    const now = Date.now();
+    grid.replaceChildren();
+    for (const s of all) {
+      const playing = [...S.sb.playing.values()].filter((e) => e.id === s.id && e.endsAt > now);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'sb-btn' + (playing.length ? ' playing' : '');
+      b.dataset.id = s.id;
+      b.innerHTML = '<span class="sb-emoji"></span><span class="sb-name"></span><span class="sb-meta"></span><span class="sb-prog"></span>';
+      b.querySelector('.sb-emoji').textContent = s.emoji;
+      b.querySelector('.sb-name').textContent = s.name;
+      const fx = s.effect ? fxPreset(s.effect) : null;
+      b.querySelector('.sb-meta').textContent = playing.length ? playing[playing.length - 1].name : fx ? fx.emoji + ' ' + fx.label : s.duration ? fmtDur(s.duration) : '';
+      b.title = s.name + (fx ? ` · çalarken sesin: ${fx.label}` : '') + (s.by ? ` · ekleyen: ${s.by}` : '');
+      if (playing.length) {
+        const e = playing[playing.length - 1];
+        const left = Math.max(0, e.endsAt - now) / 1000;
+        const prog = b.querySelector('.sb-prog');
+        prog.style.animationDuration = e.dur + 's';
+        prog.style.animationDelay = -(e.dur - left) + 's';
+      }
+      b.onclick = () => {
+        if (!wsSend({ t: 'sound-play', id: s.id })) toast('Sunucuya bağlı değil.');
+      };
+      if (!SB_BUILTIN.includes(s)) {
+        const del = document.createElement('span');
+        del.className = 'sb-del';
+        del.title = 'Ses tahtasından sil';
+        del.innerHTML = svgIcon('x');
+        del.onclick = (ev) => {
+          ev.stopPropagation();
+          if (confirm(`"${s.name}" herkes için ses tahtasından silinsin mi?`)) wsSend({ t: 'sound-delete', id: s.id });
+        };
+        b.appendChild(del);
+      }
+      grid.appendChild(b);
+    }
+    $('#sb-stop').hidden = S.sb.playing.size === 0;
+    $('#sb-count').textContent = S.sb.list.length ? S.sb.list.length + ' eklenen' : '';
+  }
+
+  function setPanelTab(tab) {
+    S.panelTab = tab;
+    store.set('panelTab', tab);
+    $('#music-panel').classList.toggle('tab-fx', tab === 'fx');
+    $('#tab-music').classList.toggle('active', tab !== 'fx');
+    $('#tab-fx').classList.toggle('active', tab === 'fx');
+    $('#tab-music').setAttribute('aria-selected', String(tab !== 'fx'));
+    $('#tab-fx').setAttribute('aria-selected', String(tab === 'fx'));
+    if (tab === 'fx') {
+      renderFx();
+      renderSb();
+    }
+  }
+
+  async function submitSound(e) {
+    e.preventDefault();
+    const file = $('#sb-file').files[0];
+    const note = $('#sb-note');
+    const fail = (t) => {
+      note.textContent = t;
+      note.hidden = false;
+    };
+    note.hidden = true;
+    if (!file) return fail('Bir ses dosyası seç.');
+    if (file.size > S.sb.maxMB * 1048576) return fail(`Ses dosyası en fazla ${S.sb.maxMB} MB olabilir.`);
+    if (!S.ctx) return fail('Önce kanala katıl.');
+    let duration;
+    try {
+      duration = (await S.ctx.decodeAudioData(await file.arrayBuffer())).duration;
+    } catch {
+      return fail('Bu dosya ses olarak açılamadı.');
+    }
+    if (duration > S.sb.maxSec) return fail(`Ses en fazla ${Math.round(S.sb.maxSec / 60)} dakika olabilir.`);
+    const q = new URLSearchParams({
+      k: S.streamToken || '',
+      name: $('#sb-name').value.trim() || file.name.replace(/\.[^.]+$/, ''),
+      emoji: $('#sb-emoji').value.trim(),
+      effect: $('#sb-effect').value,
+      duration: duration.toFixed(2),
+    });
+    const btn = $('#sb-save');
+    btn.disabled = true;
+    btn.textContent = 'Yükleniyor…';
+    try {
+      const r = await fetch('/sound?' + q, { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) return fail(body.error || 'Ses eklenemedi (' + r.status + ').');
+      $('#sb-form').reset();
+      $('#sb-form').hidden = true;
+      $('#sb-add').hidden = false;
+      toast('Ses tahtasına eklendi: ' + body.emoji + ' ' + body.name);
+    } catch {
+      fail('Bağlantı hatası, ses eklenemedi.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Ekle';
+    }
+  }
+
+  function initFx() {
+    for (const p of FX_PRESETS.slice(1)) {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.emoji + ' ' + p.label;
+      $('#sb-effect').appendChild(o);
+    }
+    $('#tab-music').onclick = () => setPanelTab('music');
+    $('#tab-fx').onclick = () => setPanelTab('fx');
+    setPanelTab(store.get('panelTab', 'music'));
+    $('#fx-pitch').oninput = (e) => {
+      S.fx.pitch = Number(e.target.value);
+      const p = fxPreset(S.fx.preset);
+      // Tonu elle değiştirmek ton tabanlı hazır ayardan "Özel"e geçirir (robot/telsiz gibi modlar kalır)
+      if (!p.mode && S.fx.pitch !== p.pitch) S.fx.preset = 'off';
+      store.set('fxPreset', S.fx.preset);
+      store.set('fxPitch', S.fx.pitch);
+      applyFx();
+    };
+    $('#fx-monitor').onclick = () => {
+      S.fx.monitor = !S.fx.monitor;
+      if (S.fx.monitor) toast('Kendini dinliyorsun. Kulaklık takılı değilse yankı olur.', 3500);
+      applyFx();
+    };
+    $('#sb-vol').value = S.sb.vol;
+    $('#sb-vol-val').textContent = S.sb.vol + '%';
+    $('#sb-vol').oninput = (e) => {
+      S.sb.vol = Number(e.target.value);
+      store.set('sbVol', S.sb.vol);
+      $('#sb-vol-val').textContent = S.sb.vol + '%';
+      if (S.sb.gain) sbOut();
+    };
+    $('#sb-stop').onclick = () => wsSend({ t: 'sound-stop' });
+    $('#sb-add').onclick = () => {
+      $('#sb-form').hidden = false;
+      $('#sb-add').hidden = true;
+      $('#sb-note').hidden = true;
+    };
+    $('#sb-cancel').onclick = () => {
+      $('#sb-form').reset();
+      $('#sb-form').hidden = true;
+      $('#sb-add').hidden = false;
+    };
+    $('#sb-file').onchange = () => {
+      const f = $('#sb-file').files[0];
+      if (f && !$('#sb-name').value) $('#sb-name').value = f.name.replace(/\.[^.]+$/, '').slice(0, 24);
+    };
+    $('#sb-form').addEventListener('submit', submitSound);
+    renderFx();
+    renderSb();
+  }
+
   // ---- Odak: bir kutu (kişi/kamera ya da yayın) büyük, diğerleri altta şeritte (Discord gibi) ----
   // Kutu, yerinde bir yer tutucu bırakılarak odak alanına taşınır ve geri konur. Taşıma tek adımda
   // yapıldığı için içindeki video durmaz.
@@ -1613,6 +2263,8 @@
     if (!S.selfEl) return;
     S.selfEl.querySelector('.i-mute').hidden = !(S.muted || S.deafened || !S.track);
     S.selfEl.querySelector('.i-deaf').hidden = !S.deafened;
+    S.selfEl.querySelector('.i-fx').hidden = !fxOn();
+    S.selfEl.querySelector('.i-fx').title = 'Ses efekti: ' + fxLabel();
     let text = 'Mikrofon açık';
     if (!S.track) text = 'Mikrofon yok (dinleyici)';
     else if (S.deafened) text = 'Ses kapalı';
@@ -1665,6 +2317,9 @@
       setCardStatus(p.el, 'warn', 'Bağlanıyor…');
     }
     p.el.querySelector('.i-lmute').hidden = !p.localMuted;
+    const fxi = p.el.querySelector('.i-fx');
+    fxi.hidden = !p.fx;
+    fxi.title = 'Ses efekti: ' + p.fx;
     renderSideVol(p);
     if (menuPeer === p) renderMemberMenu();
     renderSide(p.el, { name: p.name, muted: p.muted, deafened: p.deafened, offline: !p.online, sharing: p.sharing });
@@ -1759,7 +2414,6 @@
         const node = await ensureRnnoise();
         S.procSrc = S.ctx.createMediaStreamSource(new MediaStream([raw]));
         S.procSrc.connect(node);
-        send = S.procDest.stream.getAudioTracks()[0];
         S.aiActive = true;
       } catch (err) {
         console.warn('rnnoise', err);
@@ -1769,6 +2423,14 @@
         }
       }
     }
+    // Gürültü engelleme yok ama efekt/kendini dinle açık: ham ses doğrudan efekt zincirine
+    if (raw && !S.aiActive && S.ctx && (fxOn() || S.fx.monitor)) {
+      ensureGraph();
+      S.procSrc = S.ctx.createMediaStreamSource(new MediaStream([raw]));
+      S.procSrc.connect(S.fxIn);
+    }
+    S.viaGraph = !!S.procSrc;
+    if (S.viaGraph) send = S.procDest.stream.getAudioTracks()[0];
     S.track = send;
     S.stream = send ? new MediaStream([send]) : null;
     for (const p of S.peers.values()) attachLocalTrack(p);
@@ -1799,12 +2461,10 @@
           processorOptions: { maxChannels: 1, wasmBinary: wasm },
         });
         // Chrome, Web Audio'dan üretilen izde enabled=false'u göndericiye tam yansıtmıyor;
-        // susturma/eşik için sesi bir kazanç düğümüyle gerçekten sıfırlıyoruz.
-        S.sendGain = S.ctx.createGain();
-        S.sendGain.gain.value = 0;
-        S.procDest = S.ctx.createMediaStreamDestination();
-        S.procDest.channelCount = 1;
-        node.connect(S.sendGain).connect(S.procDest);
+        // susturma/eşik için sesi bir kazanç düğümüyle (sendGain) gerçekten sıfırlıyoruz.
+        // RNNoise çıkışı efekt zincirine (fxIn) girer.
+        ensureGraph();
+        node.connect(S.fxIn);
         S.rnnoiseNode = node;
         // Yamalı worklet ~21 ms'de bir RNNoise'un konuşma olasılığını (0-1) gönderir
         node.port.onmessage = (e) => {
@@ -1950,7 +2610,7 @@
     const want = !!S.track && !S.muted && !S.deafened && (S.mode === 'ptt' ? S.pttDown : gateOpen());
     if (S.track && S.track.enabled !== want) S.track.enabled = want;
     if (S.sendGain) {
-      const g = want && S.aiActive ? 1 : 0;
+      const g = want && S.viaGraph ? 1 : 0;
       if (S.sendGainTarget !== g) {
         S.sendGainTarget = g;
         // ~5 ms yumuşak geçiş: tık sesi olmasın
@@ -2040,7 +2700,7 @@
     ws.onopen = () => {
       clearTimeout(openTimeout);
       if (S.ws !== ws) return;
-      wsSend({ t: 'join', room: S.room, id: S.id, name: S.name, muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen, camera: !!S.cam, musicReady: true });
+      wsSend({ t: 'join', room: S.room, id: S.id, name: S.name, muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen, camera: !!S.cam, fx: fxLabel(), musicReady: true });
       startPing();
     };
     ws.onmessage = (e) => {
@@ -2159,6 +2819,21 @@
       case 'typing':
         onTyping(m);
         break;
+      case 'sounds': {
+        const ids = new Set(m.list.map((s) => s.id));
+        for (const id of S.sb.buffers.keys()) if (!SB_BUILTIN.some((s) => s.id === id) && !ids.has(id)) S.sb.buffers.delete(id);
+        S.sb.list = m.list;
+        renderSb();
+        prefetchSounds();
+        break;
+      }
+      case 'sound':
+        playSound(m);
+        break;
+      case 'sound-stop':
+        if (S.sb.playing.size && m.from !== S.id) toast(m.by + ' ses tahtasını durdurdu');
+        stopSounds();
+        break;
       case 'music-results':
         onMusicResults(m);
         break;
@@ -2238,6 +2913,13 @@
       }
     }
     if (m.uploadMaxMB) S.uploadMaxMB = m.uploadMaxMB;
+    if (Array.isArray(m.sounds)) {
+      S.sb.list = m.sounds;
+      if (m.soundMaxMB) S.sb.maxMB = m.soundMaxMB;
+      if (m.soundMaxSec) S.sb.maxSec = m.soundMaxSec;
+      renderSb();
+      setTimeout(prefetchSounds, 2000);
+    }
     if (Array.isArray(m.chat)) {
       // İlk girişte geçmişi baştan çiz; yeniden bağlanınca sadece kaçırılanları ekle
       if (first) resetChat();
@@ -2277,6 +2959,7 @@
     const wasSharing = p.sharing;
     p.sharing = !!m.sharing;
     p.camera = !!m.camera;
+    p.fx = m.fx || '';
     if (p.online) p.absentSince = 0;
     if (wasSharing && !p.sharing) p.iWatch = false;
     if (p.sharing && !wasSharing) chatAppend('', `${p.name} ekranını paylaşmaya başladı`, 0, true);
@@ -2322,6 +3005,7 @@
         relay: false,
         sharing: !!info.sharing,
         camera: !!info.camera,
+        fx: info.fx || '',
         watching: false, // bu kişi benim yayınımı izliyor
         iWatch: false, // ben bu kişinin yayınını izliyorum
         el: null,
@@ -2355,6 +3039,7 @@
       p.online = info.online !== false;
       p.sharing = !!info.sharing;
       p.camera = !!info.camera;
+      p.fx = info.fx || '';
       if (!p.sharing) p.iWatch = false;
     }
     refreshCam(p);
@@ -3106,7 +3791,7 @@
   }
 
   function publishState() {
-    wsSend({ t: 'state', muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen, camera: !!S.cam });
+    wsSend({ t: 'state', muted: S.muted || !S.track, deafened: S.deafened, sharing: !!S.screen, camera: !!S.cam, fx: fxLabel() });
   }
 
   function toggleMute() {
@@ -3124,6 +3809,8 @@
     for (const p of S.peers.values()) applyPeerAudio(p);
     applyTransmit();
     applyMusicVolume();
+    if (S.sb.gain) sbOut();
+    applyMonitor();
     renderSelf();
     publishState();
     (S.muted ? sfx.mute : sfx.unmute)();
@@ -4225,6 +4912,7 @@
     $('.stage').classList.remove('has-screens', 'focus');
     $('.user-panel').classList.remove('speaking');
     closePip();
+    stopSounds();
     if (ft.el) ft.el.hidden = true;
     if (S.spot) {
       S.spot.style.removeProperty('width');
@@ -4340,6 +5028,7 @@
     initChat();
     initFloat();
     initSpot();
+    initFx();
 
     // Müzik paneli
     $('#music-btn').onclick = () => $('#music-panel').classList.toggle('open');

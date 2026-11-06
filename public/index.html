@@ -58,6 +58,7 @@
     <symbol id="i-rotate" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><path d="M14 6.5h3.5a2 2 0 0 1 2 2V11M10 17.5H6.5a2 2 0 0 1-2-2V13"/></symbol>
     <symbol id="i-focus" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
     <symbol id="i-unfocus" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></symbol>
+    <symbol id="i-wand" viewBox="0 0 24 24"><path d="M4 20L15 9M14 4v3M19 9h-3M17.5 5.5l-2 2M9 4.5l.6 1.4 1.4.6-1.4.6L9 8.5l-.6-1.4L7 6.5l1.4-.6zM19 14.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></symbol>
     <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
   </svg>
 
@@ -196,13 +197,14 @@
     <!-- Sağ: müzik -->
     <aside id="music-panel" class="music-panel" aria-label="Müzik">
       <header class="mp-head">
-        <svg class="ic"><use href="#i-music"/></svg>
-        <span>Müzik</span>
-        <span id="music-dot" class="live-dot" hidden></span>
+        <div class="mp-tabs" role="tablist">
+          <button id="tab-music" class="mp-tab active" type="button" role="tab" aria-selected="true"><svg class="ic"><use href="#i-music"/></svg>Müzik<span id="music-dot" class="live-dot" hidden></span></button>
+          <button id="tab-fx" class="mp-tab" type="button" role="tab" aria-selected="false"><svg class="ic"><use href="#i-wand"/></svg>Efektler<span id="fx-dot" class="fx-dot" hidden></span></button>
+        </div>
         <span class="spacer"></span>
         <button id="music-close" class="icon-btn mobile-only" title="Kapat"><svg class="ic"><use href="#i-x"/></svg></button>
       </header>
-      <div class="mp-body">
+      <div id="mp-music" class="mp-body">
         <form id="music-form" class="mp-search" autocomplete="off">
           <svg class="ic"><use href="#i-search"/></svg>
           <input id="music-input" maxlength="300" placeholder="Şarkı ara ya da link yapıştır" aria-label="Şarkı adı ya da YouTube/SoundCloud linki">
@@ -252,6 +254,37 @@
         </section>
 
         <p class="mp-hint">Müzik herkesin kendi cihazında çalar, mikrofondan gitmez; ses seviyesi sadece senin için. Sohbette <b>/play</b>, <b>/skip</b>, <b>/prev</b>, <b>/loop</b>, <b>/stop</b> da çalışır.</p>
+      </div>
+
+      <!-- Efektler: ses efekti + ses tahtası -->
+      <div id="mp-fx" class="mp-body fx-body">
+        <section class="mp-section">
+          <div class="mp-sec-head"><span>Ses efekti</span><span id="fx-cur" class="muted">Kapalı</span></div>
+          <div id="fx-presets" class="fx-grid"></div>
+          <label class="fx-row" for="fx-pitch"><span>Ton</span><input type="range" id="fx-pitch" min="-12" max="12" step="1" value="0"><span id="fx-pitch-val" class="num">0</span></label>
+          <button id="fx-monitor" class="fx-toggle" type="button" role="switch" aria-checked="false"><svg class="ic"><use href="#i-head"/></svg>Kendini dinle</button>
+          <p class="mp-hint">Efekt, diğerlerinin duyduğu sesine uygulanır. Kendini dinlerken kulaklık tak; yoksa yankı olur.</p>
+        </section>
+
+        <section class="mp-section">
+          <div class="mp-sec-head"><span>Ses tahtası</span><span id="sb-count" class="muted"></span></div>
+          <div id="sb-grid" class="sb-grid"></div>
+          <button id="sb-stop" class="btn small danger sb-stop" type="button" hidden>Çalanları durdur</button>
+          <button id="sb-add" class="sb-add" type="button"><svg class="ic"><use href="#i-plus-circle"/></svg>Ses ekle</button>
+          <form id="sb-form" class="sb-form" autocomplete="off" hidden>
+            <input type="file" id="sb-file" accept="audio/*,.mp3,.ogg,.wav,.m4a,.webm">
+            <div class="sb-form-row">
+              <input id="sb-emoji" maxlength="8" placeholder="🔊" aria-label="Simge (emoji)">
+              <input id="sb-name" maxlength="24" placeholder="Ad" aria-label="Ses adı">
+            </div>
+            <label class="sb-label" for="sb-effect">Çalarken sesimi değiştir</label>
+            <select id="sb-effect"><option value="">Değiştirme</option></select>
+            <p id="sb-note" class="error" hidden></p>
+            <div class="sb-form-row"><button id="sb-cancel" class="btn ghost small" type="button">Vazgeç</button><button id="sb-save" class="btn primary small" type="submit">Ekle</button></div>
+          </form>
+          <span class="vol-wrap" title="Ses tahtası sesi (sadece senin için)"><svg class="ic"><use href="#i-speaker"/></svg><input type="range" id="sb-vol" min="0" max="100" value="70" aria-label="Ses tahtası sesi"><span id="sb-vol-val" class="num">70%</span></span>
+          <p class="mp-hint">Bastığın ses kanaldaki herkeste aynı anda çalar. Bir sese efekt bağlarsan, o sesi çalan kişinin sesi ses bitene kadar o efektle gider.</p>
+        </section>
       </div>
     </aside>
   </section>
@@ -356,6 +389,7 @@
         <span class="i-mute" title="Mikrofon kapalı" hidden><svg class="ic"><use href="#i-mic-off"/></svg></span>
         <span class="i-deaf" title="Sesi kapalı" hidden><svg class="ic"><use href="#i-head-off"/></svg></span>
         <span class="i-lmute" title="Sende susturuldu" hidden><svg class="ic"><use href="#i-speaker-off"/></svg></span>
+        <span class="i-fx" title="Ses efekti" hidden>FX</span>
       </div>
     </div>
   </template>

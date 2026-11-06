@@ -686,3 +686,62 @@ label .muted, label .num { text-transform: none; letter-spacing: 0; font-weight:
   .stage.spotlit .call-strip .participant, .stage.spotlit .call-strip .screen-tile { width: 140px; }
   .stage.spotlit .call-strip .screen-tile { height: 79px; }
 }
+
+/* ================================================================
+   Sağ panel sekmeleri (Müzik | Efektler) ve Efektler ekranı
+   ================================================================ */
+.mp-head { padding-left: 8px; }
+.mp-tabs { display: flex; gap: 4px; }
+.mp-tab { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.mp-tab .ic { width: 16px; height: 16px; }
+.mp-tab:hover { background: var(--bg-4); color: var(--text); }
+.mp-tab.active { background: var(--bg-5); color: var(--head); }
+.fx-dot { width: 8px; height: 8px; border-radius: 50%; background: #a78bfa; }
+/* Efektler açıkken müzik bölümü gizlenir ama ekran dışında yaşamaya devam eder (müzik çalmaya devam etsin) */
+.fx-body { display: none; }
+.music-panel.tab-fx #mp-fx { display: flex; }
+.music-panel { position: relative; }
+.music-panel.tab-fx #mp-music { position: absolute; left: -10000px; top: 0; width: 320px; visibility: hidden; pointer-events: none; }
+
+.fx-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.fx-chip { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 4px; border: 1px solid transparent; border-radius: 8px; background: var(--bg-3); color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.fx-chip:hover { background: var(--bg-4); }
+.fx-chip.on { border-color: #a78bfa; background: rgba(167,139,250,.14); color: var(--head); }
+.fx-emoji { font-size: 22px; line-height: 1.2; }
+.fx-row { display: grid; grid-template-columns: auto 1fr 32px; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); padding: 4px 2px 0; }
+.fx-row .num { text-align: right; }
+.fx-toggle { display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; padding: 6px 10px; border: 1px solid var(--bg-5); border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.fx-toggle .ic { width: 16px; height: 16px; }
+.fx-toggle:hover { color: var(--text); background: var(--bg-4); }
+.fx-toggle.on { color: #fff; background: var(--accent); border-color: var(--accent); }
+
+.sb-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.sb-btn { position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 74px; padding: 8px 4px 6px; border: 0; border-radius: 8px; background: var(--bg-3); color: var(--text); font: inherit; cursor: pointer; }
+.sb-btn:hover { background: var(--bg-4); }
+.sb-btn:active { transform: scale(.97); }
+.sb-btn.playing { background: rgba(35,165,90,.16); box-shadow: inset 0 0 0 1px rgba(35,165,90,.6); }
+.sb-emoji { font-size: 24px; line-height: 1.2; }
+.sb-name { font-size: 12.5px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-meta { font-size: 11px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-prog { position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: var(--green); }
+.sb-btn.playing .sb-prog { animation: sb-prog linear forwards; }
+@keyframes sb-prog { from { width: 0; } to { width: 100%; } }
+.sb-del { position: absolute; top: 3px; right: 3px; width: 20px; height: 20px; border-radius: 50%; display: none; place-items: center; background: rgba(0,0,0,.55); color: #ddd; }
+.sb-del .ic { width: 12px; height: 12px; }
+.sb-del:hover { background: var(--red-2); color: #fff; }
+.sb-btn:hover .sb-del { display: grid; }
+@media (hover: none) { .sb-del { display: grid; } }
+.sb-stop { align-self: stretch; }
+.sb-add { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px; border: 1px dashed var(--bg-5); border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.sb-add .ic { width: 18px; height: 18px; }
+.sb-add:hover { color: var(--head); border-color: var(--muted); }
+.sb-form { display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 8px; background: var(--bg-3); }
+.sb-form input[type=file] { font-size: 12.5px; color: var(--muted); }
+.sb-form-row { display: flex; gap: 6px; }
+.sb-form-row #sb-emoji { width: 52px; text-align: center; flex: none; }
+.sb-form-row #sb-name { flex: 1; min-width: 0; }
+.sb-form-row .btn { flex: 1; }
+.sb-label { font-size: 12px; color: var(--muted); margin-bottom: -4px; }
+
+/* Kutularda: ses efekti açık */
+.p-icons > span.i-fx { width: auto; padding: 0 7px; border-radius: 99px; color: #c4b5fd; font-size: 10.5px; font-weight: 800; letter-spacing: .03em; }

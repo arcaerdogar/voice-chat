@@ -16,6 +16,7 @@ const { createYouTube, parseYouTubeId, parseSoundCloudUrl, looksLikeUrl, cleanTi
 const { createYtDlp } = require('./ytdlp');
 const { createAdmin } = require('./admin');
 const { createUploads } = require('./uploads');
+const { createSounds } = require('./sounds');
 
 // Mesajlara bırakılabilecek tepkiler
 const REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👀', '💯', '🙏', '😡', '✅'];
@@ -215,6 +216,15 @@ function createServer(options = {}) {
       ttlMs: (Number(env.UPLOAD_TTL_HOURS) || 24) * 3600 * 1000,
       log,
     });
+  // Ses tahtası: kalıcı kütüphane (tüm kanallarda ortak)
+  const sounds =
+    options.sounds ||
+    createSounds({
+      dir: env.SOUNDS_DIR || path.join(__dirname, 'sounds'),
+      maxBytes: (Number(env.SOUND_MAX_MB) || 5) * 1048576,
+      log,
+    });
+
   function chatOf(roomName) {
     let c = roomChat.get(roomName);
     if (!c) roomChat.set(roomName, (c = []));
@@ -548,6 +558,47 @@ function createServer(options = {}) {
     }
   }
 
+  /** Ses tahtasına ses ekle: POST /sound?k=<anahtar>&name=&emoji=&effect=&duration= (gövde: ses dosyası) */
+  async function handleSoundUpload(req, res, url) {
+    const reply = (status, body) => {
+      res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(body));
+    };
+    const mem = streamTokens.get(url.searchParams.get('k') || '');
+    const room = mem && rooms.get(mem.room);
+    if (!room || room.get(mem.id) !== mem) {
+      req.resume();
+      return reply(403, { error: 'Ses eklemek için kanalda olmalısın.' });
+    }
+    const now = Date.now();
+    mem.soundUploads = (mem.soundUploads || []).filter((t) => now - t < 60000);
+    if (mem.soundUploads.length >= 10) {
+      req.resume();
+      return reply(429, { error: 'Çok hızlı ses ekliyorsun, biraz bekle.' });
+    }
+    mem.soundUploads.push(now);
+    try {
+      const s = await sounds.add(req, {
+        name: url.searchParams.get('name'),
+        emoji: url.searchParams.get('emoji'),
+        effect: url.searchParams.get('effect') || '',
+        duration: url.searchParams.get('duration'),
+        by: mem.name,
+      });
+      logEvent('sound', `${mem.name} ses tahtasına ekledi: ${s.emoji} ${s.name}`);
+      broadcastSounds();
+      reply(200, sounds.publicInfo(s));
+    } catch (err) {
+      reply(err.status || 500, { error: err.status ? err.message : 'Ses kaydedilemedi.' });
+    }
+  }
+
+  /** Ses tahtası listesi değişti: tüm kanallara bildir */
+  function broadcastSounds() {
+    const list = sounds.list();
+    for (const name of rooms.keys()) broadcast(name, { t: 'sounds', list });
+  }
+
   function handleHttp(req, res) {
     securityHeaders(res);
     const url = new URL(req.url, 'http://x');
@@ -576,6 +627,23 @@ function createServer(options = {}) {
         if (!res.headersSent) res.writeHead(500);
         res.end();
       });
+      return;
+    }
+    if (pathname === '/sound' && req.method === 'POST') {
+      handleSoundUpload(req, res, url).catch((err) => {
+        log('sound', err.message);
+        if (!res.headersSent) res.writeHead(500);
+        res.end();
+      });
+      return;
+    }
+    if (pathname.startsWith('/sounds/') && (req.method === 'GET' || req.method === 'HEAD')) {
+      // Sadece kanaldaki biri (anahtarıyla) indirebilir
+      if (!streamTokens.has(url.searchParams.get('k') || '')) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('izin yok');
+      }
+      sounds.serve(req, res, pathname.split('/')[2] || '');
       return;
     }
     if (pathname.startsWith('/files/') && (req.method === 'GET' || req.method === 'HEAD')) {
@@ -644,7 +712,7 @@ function createServer(options = {}) {
   }
 
   function publicMember(m) {
-    return { id: m.id, name: m.name, muted: m.muted, deafened: m.deafened, online: m.online, sharing: !!m.sharing, camera: !!m.camera };
+    return { id: m.id, name: m.name, muted: m.muted, deafened: m.deafened, online: m.online, sharing: !!m.sharing, camera: !!m.camera, fx: m.fx || '' };
   }
 
   function broadcast(roomName, msg, exceptId) {
@@ -785,6 +853,7 @@ function createServer(options = {}) {
             existing.sharing = !!msg.sharing;
             existing.camera = !!msg.camera;
             existing.musicReady = !!msg.musicReady;
+            existing.fx = typeof msg.fx === 'string' ? msg.fx.slice(0, 16) : '';
             existing.ip = ws.ip;
             existing.country = ws.country;
             existing.ua = ws.ua;
@@ -804,6 +873,7 @@ function createServer(options = {}) {
               sharing: !!msg.sharing,
               camera: !!msg.camera,
               musicReady: !!msg.musicReady, // şarkı yüklenince "hazırım" bildirir
+              fx: typeof msg.fx === 'string' ? msg.fx.slice(0, 16) : '', // açık ses efekti
               online: true,
               ws,
               graceTimer: null,
@@ -835,6 +905,9 @@ function createServer(options = {}) {
             streamToken: member.streamToken,
             chat: chatOf(roomName),
             uploadMaxMB: Math.round(uploads.maxBytes / 1048576),
+            sounds: sounds.list(),
+            soundMaxMB: Math.round(sounds.maxBytes / 1048576),
+            soundMaxSec: sounds.maxDuration,
           });
           return;
         }
@@ -854,6 +927,7 @@ function createServer(options = {}) {
           member.deafened = !!msg.deafened;
           member.sharing = !!msg.sharing; // ekran paylaşıyor mu (görüntü P2P akar, sunucudan geçmez)
           member.camera = !!msg.camera; // kamerası açık mı
+          member.fx = typeof msg.fx === 'string' ? msg.fx.slice(0, 16) : ''; // açık ses efekti (kutuda gösterilir)
           if (typeof msg.name === 'string' && cleanName(msg.name)) member.name = cleanName(msg.name);
           broadcast(member.room, { t: 'peer-state', ...publicMember(member) }, member.id);
           return;
@@ -910,6 +984,31 @@ function createServer(options = {}) {
           if (member.typingAt && now - member.typingAt < 1500) return;
           member.typingAt = now;
           broadcast(member.room, { t: 'typing', from: member.id, name: member.name }, member.id);
+          return;
+        }
+
+        case 'sound-play': {
+          // Ses tahtası: herkeste aynı anda çalar (ses sunucudan geçmez, herkes kendisi çalar)
+          if (!member || member.ws !== ws || typeof msg.id !== 'string' || !sounds.has(msg.id)) return;
+          member.sbTimes = (member.sbTimes || []).filter((t) => now - t < 10000);
+          if (member.sbTimes.length >= 8 || (member.sbTimes.length && now - member.sbTimes[member.sbTimes.length - 1] < 400)) return;
+          member.sbTimes.push(now);
+          broadcast(member.room, { t: 'sound', id: msg.id, from: member.id, name: member.name, at: now + 250, play: newKey() });
+          return;
+        }
+
+        case 'sound-stop': {
+          if (!member || member.ws !== ws) return;
+          broadcast(member.room, { t: 'sound-stop', by: member.name, from: member.id });
+          return;
+        }
+
+        case 'sound-delete': {
+          if (!member || member.ws !== ws || typeof msg.id !== 'string') return;
+          const s = sounds.remove(msg.id);
+          if (!s) return;
+          logEvent('sound', `${member.name} ses tahtasından sildi: ${s.emoji} ${s.name}`);
+          broadcastSounds();
           return;
         }
 

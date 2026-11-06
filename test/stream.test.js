@@ -43,7 +43,7 @@ async function until(page, pred, timeout, label) {
     if (pred(last)) return last;
     await new Promise((r) => setTimeout(r, 250));
   }
-  throw new Error(`${label} gerçekleşmedi: ${JSON.stringify(last)}\nsohbet: ${await page.textContent('#chat-log')}`);
+  throw new Error(`${label} gerçekleşmedi: ${JSON.stringify(last)}\nsohbet: ${await page.textContent('#chat-log')}\nbildirim: ${await page.textContent('#toast')}`);
 }
 
 test('Müzik akışı (yt-dlp): isimle arama, sadece ses, senkron, yetki ve veri kullanımı', { timeout: 240000, skip: !ytdlpOk() && 'yt-dlp yok' }, async (t) => {
