@@ -137,6 +137,56 @@ test('efektler ve ses tahtası', { timeout: 180000 }, async (t) => {
     assert.ok(Math.abs(off.f / before.f - 1) < 0.03, 'kapatınca ton eski haline dönmeli');
   });
 
+  await t.test('mağara yankısı mikrofon kapanınca kesilmez, doğal olarak söner', async () => {
+    // B'nin A'dan duyduğu seviyeyi zaman çizelgesi olarak kaydet; kayıt sürerken A mikrofonunu kapatır
+    const record = (ms) =>
+      B.evaluate(async (ms) => {
+        const S = window.__rv;
+        const p = [...S.peers.values()].find((x) => x.name === 'Ahri');
+        const src = S.ctx.createMediaStreamSource(p.audio.srcObject);
+        const an = S.ctx.createAnalyser();
+        an.fftSize = 2048;
+        src.connect(an);
+        const d = new Float32Array(an.fftSize);
+        const out = [];
+        const t0 = Date.now();
+        while (Date.now() - t0 < ms) {
+          an.getFloatTimeDomainData(d);
+          let s = 0;
+          for (const x of d) s += x * x;
+          const rms = Math.sqrt(s / d.length);
+          out.push([Date.now(), rms > 0 ? 20 * Math.log10(rms) : -120]);
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        src.disconnect();
+        return out;
+      }, ms);
+    const muteDuring = async () => {
+      const rec = record(5000);
+      await new Promise((r) => setTimeout(r, 1000));
+      const at = Date.now();
+      await A.click('#mute-btn');
+      const tl = await rec;
+      await A.click('#mute-btn');
+      const peak = (from, to) => Math.max(...tl.filter(([t]) => t >= at + from && t < at + to).map(([, db]) => db));
+      return { before: peak(-900, 0), tail: peak(300, 1500), end: peak(3600, 4000) };
+    };
+    await A.click('.fx-chip[data-id=magara]');
+    await A.waitForFunction(() => window.__rv.fxChain);
+    await new Promise((r) => setTimeout(r, 1000));
+    const cave = await muteDuring();
+    t.diagnostic('mağara, mikrofon kapanınca (dB): ' + JSON.stringify(cave));
+    assert.ok(cave.before > -30, 'önce ses gelmeli');
+    assert.ok(cave.tail > -60, 'kapandıktan sonra yankı sürmeli');
+    assert.ok(cave.end < -80, 'yankı birkaç saniyede sönmeli');
+    // Efekt yokken mikrofon anında susar
+    await A.click('.fx-chip[data-id=off]');
+    await new Promise((r) => setTimeout(r, 1000));
+    const plain = await muteDuring();
+    t.diagnostic('efektsiz (dB): ' + JSON.stringify(plain));
+    assert.ok(plain.tail < -80, 'efekt yokken kapanınca hemen sessizlik');
+  });
+
   await t.test('hazır ses herkeste çalar', async () => {
     await B.click('#tab-fx');
     await A.click('.sb-btn[data-id=korna]');

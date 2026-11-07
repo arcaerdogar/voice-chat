@@ -1187,7 +1187,8 @@
   // =====================================================================
   // Efektler: ses efektleri (mikrofon sesine uygulanır) ve ses tahtası
   // =====================================================================
-  // Mikrofon zinciri: ham ses → [RNNoise] → fxIn → (efekt zinciri) → sendGain (sustur/eşik) → gönderim
+  // Mikrofon zinciri: ham ses → [RNNoise] → sendGain (sustur/eşik) → fxIn → (efekt zinciri) → fxOut → gönderim
+  // Kapı efektin önünde: konuşma bitip kapı kapanınca yankı/mağara kuyruğu kesilmeden söner.
   const FX_PRESETS = [
     { id: 'off', label: 'Kapalı', emoji: '🚫', pitch: 0, mode: '' },
     { id: 'kalin', label: 'Kalın', emoji: '🐻', pitch: -5, mode: '' },
@@ -1261,13 +1262,15 @@ registerProcessor('yanki-pitch', YankiPitch);`;
   /** Efekt zincirinin giriş/çıkışı ve gönderim düğümleri (RNNoise olsun olmasın) */
   function ensureGraph() {
     if (S.fxIn) return;
-    S.sendGain = S.ctx.createGain();
+    S.sendGain = S.ctx.createGain(); // kapı: sustur / ses eşiği
     S.sendGain.gain.value = 0;
+    S.fxIn = S.ctx.createGain();
+    S.fxOut = S.ctx.createGain();
     S.procDest = S.ctx.createMediaStreamDestination();
     S.procDest.channelCount = 1;
-    S.sendGain.connect(S.procDest);
-    S.fxIn = S.ctx.createGain();
-    S.fxIn.connect(S.sendGain);
+    S.sendGain.connect(S.fxIn);
+    S.fxIn.connect(S.fxOut); // efekt yokken doğrudan geçiş
+    S.fxOut.connect(S.procDest);
   }
 
   function shaper(k) {
@@ -1395,18 +1398,19 @@ registerProcessor('yanki-pitch', YankiPitch);`;
     S.fxChain = buildFxChain(e);
     if (S.fxChain) {
       S.fxIn.connect(S.fxChain.input);
-      S.fxChain.output.connect(S.sendGain);
-    } else S.fxIn.connect(S.sendGain);
+      S.fxChain.output.connect(S.fxOut);
+    } else S.fxIn.connect(S.fxOut);
     applyMonitor();
+    applyTransmit(); // efekt açıkken iz açık kalır (kuyruk gönderilebilsin)
   }
 
   /** Kendini dinle: diğerlerine giden sesi (efekt + eşik dahil) kendi hoparlöründe çal */
   function applyMonitor() {
-    if (!S.ctx || !S.sendGain) return;
+    if (!S.ctx || !S.fxOut) return;
     if (!S.monGain) {
       S.monGain = S.ctx.createGain();
       S.monGain.connect(S.ctx.destination);
-      S.sendGain.connect(S.monGain);
+      S.fxOut.connect(S.monGain);
     }
     S.monGain.gain.value = S.fx.monitor && !S.deafened ? 1 : 0;
   }
@@ -2349,7 +2353,7 @@ registerProcessor('yanki-pitch', YankiPitch);`;
     if (raw && !S.aiActive && S.ctx && (fxOn() || S.fx.monitor)) {
       ensureGraph();
       S.procSrc = S.ctx.createMediaStreamSource(new MediaStream([raw]));
-      S.procSrc.connect(S.fxIn);
+      S.procSrc.connect(S.sendGain);
     }
     S.viaGraph = !!S.procSrc;
     if (S.viaGraph) send = S.procDest.stream.getAudioTracks()[0];
@@ -2384,9 +2388,9 @@ registerProcessor('yanki-pitch', YankiPitch);`;
         });
         // Chrome, Web Audio'dan üretilen izde enabled=false'u göndericiye tam yansıtmıyor;
         // susturma/eşik için sesi bir kazanç düğümüyle (sendGain) gerçekten sıfırlıyoruz.
-        // RNNoise çıkışı efekt zincirine (fxIn) girer.
+        // RNNoise çıkışı kapıya (sendGain), oradan efekt zincirine girer.
         ensureGraph();
-        node.connect(S.fxIn);
+        node.connect(S.sendGain);
         S.rnnoiseNode = node;
         // Yamalı worklet ~21 ms'de bir RNNoise'un konuşma olasılığını (0-1) gönderir
         node.port.onmessage = (e) => {
@@ -2530,7 +2534,9 @@ registerProcessor('yanki-pitch', YankiPitch);`;
 
   function applyTransmit() {
     const want = !!S.track && !S.muted && !S.deafened && (S.mode === 'ptt' ? S.pttDown : gateOpen());
-    if (S.track && S.track.enabled !== want) S.track.enabled = want;
+    // Efekt açıkken iz kapatılmaz: kapı mikrofonu zaten sıfırlar, efektin kuyruğu (yankı) sönene kadar gider
+    const trackOn = want || (S.viaGraph && fxOn());
+    if (S.track && S.track.enabled !== trackOn) S.track.enabled = trackOn;
     if (S.sendGain) {
       const g = want && S.viaGraph ? 1 : 0;
       if (S.sendGainTarget !== g) {
